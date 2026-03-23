@@ -16,7 +16,7 @@
 
 ## 默认目录
 
-- 控制台代码：[apps/console](/home/codex/grok-register/apps/console)
+- 控制台代码：[apps/console](.)
 - 运行数据：`apps/console/runtime/`
 - 任务目录：`apps/console/runtime/tasks/task_<id>/`
 
@@ -51,4 +51,4 @@ python app.py
 
 ## systemd 示例
 
-参考 [grok-register-console.service.example](/home/codex/grok-register/apps/console/grok-register-console.service.example)。
+参考 [grok-register-console.service.example](grok-register-console.service.example)。

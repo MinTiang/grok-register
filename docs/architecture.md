@@ -6,7 +6,7 @@
 
 ### 1. console
 
-位置：[apps/console](/home/codex/grok-register/apps/console)
+位置：[apps/console](../apps/console)
 
 职责：
 
@@ -21,8 +21,8 @@
 
 当前位置的实际执行器是根目录脚本：
 
-- [DrissionPage_example.py](/home/codex/grok-register/DrissionPage_example.py)
-- [email_register.py](/home/codex/grok-register/email_register.py)
+- [DrissionPage_example.py](../DrissionPage_example.py)
+- [email_register.py](../email_register.py)
 
 职责：
 
@@ -36,7 +36,7 @@
 
 ### 3. network-gateway
 
-位置：[apps/network-gateway](/home/codex/grok-register/apps/network-gateway)
+位置：[apps/network-gateway](../apps/network-gateway)
 
 职责：
 
@@ -46,7 +46,7 @@
 
 ### 4. token-sink
 
-位置：[apps/token-sink](/home/codex/grok-register/apps/token-sink)
+位置：[apps/token-sink](../apps/token-sink)
 
 职责：
 
@@ -56,7 +56,7 @@
 
 ### 5. worker-runtime
 
-位置：[apps/worker-runtime](/home/codex/grok-register/apps/worker-runtime)
+位置：[apps/worker-runtime](../apps/worker-runtime)
 
 职责：
 

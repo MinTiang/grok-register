@@ -20,22 +20,22 @@
 
 ## 项目结构
 
-- [apps/console](/home/codex/grok-register/apps/console)：控制台
-- [apps/network-gateway](/home/codex/grok-register/apps/network-gateway)：前置网络出口约定
-- [apps/register-runner](/home/codex/grok-register/apps/register-runner)：执行器模块说明
-- [apps/token-sink](/home/codex/grok-register/apps/token-sink)：结果落池说明
-- [apps/worker-runtime](/home/codex/grok-register/apps/worker-runtime)：运行时环境定义
-- [deploy](/home/codex/grok-register/deploy)：启动脚本和部署骨架
-- [docs](/home/codex/grok-register/docs)：架构、流程、快速开始、配置说明
-- [DrissionPage_example.py](/home/codex/grok-register/DrissionPage_example.py)：当前主执行脚本
-- [email_register.py](/home/codex/grok-register/email_register.py)：临时邮箱适配层
+- [apps/console](apps/console)：控制台
+- [apps/network-gateway](apps/network-gateway)：前置网络出口约定
+- [apps/register-runner](apps/register-runner)：执行器模块说明
+- [apps/token-sink](apps/token-sink)：结果落池说明
+- [apps/worker-runtime](apps/worker-runtime)：运行时环境定义
+- [deploy](deploy)：启动脚本和部署骨架
+- [docs](docs)：架构、流程、快速开始、配置说明
+- [DrissionPage_example.py](DrissionPage_example.py)：当前主执行脚本
+- [email_register.py](email_register.py)：临时邮箱适配层
 
 ## 快速入口
 
-- 新手先看 [docs/quickstart.md](/home/codex/grok-register/docs/quickstart.md)
-- 想看完整链路看 [docs/business-flow.md](/home/codex/grok-register/docs/business-flow.md)
-- 想弄清楚字段含义看 [docs/options.md](/home/codex/grok-register/docs/options.md)
-- 想看模块边界看 [docs/architecture.md](/home/codex/grok-register/docs/architecture.md)
+- 新手先看 [docs/quickstart.md](docs/quickstart.md)
+- 想看完整链路看 [docs/business-flow.md](docs/business-flow.md)
+- 想弄清楚字段含义看 [docs/options.md](docs/options.md)
+- 想看模块边界看 [docs/architecture.md](docs/architecture.md)
 
 ## 命令行运行
 
@@ -78,11 +78,11 @@ cd /home/codex/grok-register
 }
 ```
 
-说明：
+这段的意思是：
 
-- 仓库里的模板已经去掉个人邮箱和个人域名
-- `config.json` 仍然不入库，避免把生产凭据提交到仓库
-- 代码仍兼容旧的 `duckmail_*` 字段，但新部署建议统一使用 `temp_mail_*`
+- 示例配置里不再带我测试时用过的私人邮箱接口和私人域名，你拿到仓库后不会直接看到别人的真实配置
+- 真正运行用的 `config.json` 还是只放你自己机器上，不会提交到 GitHub，避免把密码、token、邮箱接口这些敏感信息公开出去
+- 老版本如果还在用 `duckmail_api_base`、`duckmail_bearer` 这类旧字段，代码暂时还能读；但从现在开始，新配置统一写成 `temp_mail_api_base`、`temp_mail_admin_password`、`temp_mail_domain` 这些新字段
 
 ## 闭环要求
 
