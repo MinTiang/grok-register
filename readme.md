@@ -1,6 +1,6 @@
 # Grok Register
 
-面向 `x.ai` 注册批处理的一体化项目，提供控制台、注册执行器、运行时环境和 token 落池能力。
+面向 `x.ai` 注册批处理的一体化项目，提供控制台、注册执行器、WARP 网络出口、`grok2api` token 落池和运行时环境。
 
 ## 功能
 
@@ -14,11 +14,16 @@
 
 这个项目要跑通，至少要有下面 3 个外部条件：
 
-- 可用的网络出口，例如 WARP / 代理桥接
+- 可用的网络出口
 - 可被 `x.ai` 接受的临时邮箱域名
 - 可接收 token 的下游 sink，例如 `grok2api`
 
-如果这 3 段没有准备好，项目本身能启动，但注册链路不会真正闭环。
+现在仓库已经内置：
+
+- `warp`：默认网络出口
+- `grok2api`：默认 token sink
+
+所以新部署时，你不需要再额外去拉其它仓库拼接。你还需要自己准备的，主要是临时邮箱 API 和对应域名。
 
 ## 最快启动方式
 
@@ -27,22 +32,29 @@
 ```bash
 git clone https://github.com/509992828/grok-register.git
 cd grok-register
+cp .env.example .env
 docker compose up -d --build
 ```
+
+如果需要改外网端口或 `grok2api` 后台口令，先编辑 `.env`。
 
 启动后访问：
 
 - `http://<你的服务器IP>:18600`
+- `http://<你的服务器IP>:8000/admin`
 
 然后在控制台里填写：
 
-- `browser_proxy`
-- `proxy`
 - `temp_mail_api_base`
 - `temp_mail_admin_password`
 - `temp_mail_domain`
-- `api.endpoint`
-- `api.token`
+
+默认情况下：
+
+- `browser_proxy` 和 `proxy` 已经预设为容器内的 `warp`
+- `api.endpoint` 和 `api.token` 已经预设为容器内的 `grok2api`
+
+所以第一次部署时，你通常只需要补全临时邮箱这一组参数。
 
 ## 宿主机启动方式
 
@@ -55,6 +67,13 @@ pip install -r requirements.txt
 ```
 
 默认监听 `0.0.0.0:18600`。
+
+如果你只想先把内置网络和 sink 起起来，也可以执行：
+
+```bash
+cp .env.example .env
+docker compose up -d warp grok2api
+```
 
 ## 命令行验证
 
@@ -82,7 +101,7 @@ python DrissionPage_example.py --count 1
   "proxy": "",
   "browser_proxy": "",
   "api": {
-    "endpoint": "http://127.0.0.1:18000/api/v1/admin/tokens",
+    "endpoint": "http://127.0.0.1:8000/v1/admin/tokens",
     "token": "",
     "append": true
   }
@@ -110,6 +129,7 @@ python DrissionPage_example.py --count 1
 - [apps/token-sink](apps/token-sink)：结果落池说明
 - [apps/worker-runtime](apps/worker-runtime)：运行时环境定义
 - [deploy](deploy)：启动脚本和部署骨架
+- [.env.example](.env.example)：一体化部署环境变量模板
 - [docs](docs)：架构、流程、快速开始、配置说明
 - [DrissionPage_example.py](DrissionPage_example.py)：当前主执行脚本
 - [email_register.py](email_register.py)：临时邮箱适配层

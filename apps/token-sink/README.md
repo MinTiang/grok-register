@@ -6,7 +6,7 @@
 
 当前约定：
 
-- `api.endpoint`：token 管理接口，例如 `http://127.0.0.1:18000/api/v1/admin/tokens`
+- `api.endpoint`：token 管理接口，例如 `http://127.0.0.1:8000/v1/admin/tokens`
 - `api.token`：管理口令
 - `api.append=true`：先读取存量再去重合并，保护已有 token
 - `api.append=false`：直接以本次结果覆盖远端数据
@@ -17,3 +17,7 @@
 - 可选回写运行统计
 - 死信重试
 - 多个 sink 目标并发推送
+
+在当前一体化部署里，根目录 [docker-compose.yml](../../docker-compose.yml) 已经内置 `grok2api` 服务。控制台默认会把 `api.endpoint` 指向：
+
+- `http://grok2api:8000/v1/admin/tokens`

@@ -6,11 +6,16 @@
 
 这个项目不是“拉下来直接点运行就能注册成功”的类型。它依赖 3 个外部条件：
 
-- 可用的网络出口，例如 WARP / 代理桥接
+- 可用的网络出口
 - 可被 `x.ai` 接受的临时邮箱域名
 - 可接收 token 的下游 sink，例如 `grok2api`
 
 只有这 3 段都准备好，项目才会真正跑通。
+
+其中：
+
+- `warp` 和 `grok2api` 已经内置在本仓库的 `docker compose` 里
+- 你第一次部署时主要还需要自己准备临时邮箱 API
 
 宿主机模式下，至少准备好：
 
@@ -40,22 +45,25 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb
 ```bash
 git clone https://github.com/509992828/grok-register.git
 cd grok-register
+cp .env.example .env
 docker compose up -d --build
 ```
 
 默认端口：
 
 - `18600`
+- `8000`
 
 启动后打开：
 
 - `http://<你的服务器IP>:18600`
+- `http://<你的服务器IP>:8000/admin`
 
 说明：
 
 - 这个 Compose 会把控制台、浏览器和 Python 运行环境一起起起来
-- 但它不会自动替你部署 WARP、临时邮箱 API、grok2api
-- 这些仍然需要你自己准备，然后填到控制台里
+- 它也会把 `warp` 和 `grok2api` 一起起起来
+- 所以首次部署时，你主要需要在控制台里补全临时邮箱相关参数
 
 ## 4. 准备运行配置
 
@@ -68,10 +76,15 @@ cp config.example.json config.json
 - `temp_mail_api_base`
 - `temp_mail_admin_password`
 - `temp_mail_domain`
+
+如果你已经使用根目录 `docker-compose.yml` 起整套服务：
+
 - `browser_proxy`
 - `proxy`
 - `api.endpoint`
 - `api.token`
+
+通常不需要手工再改，因为控制台会默认指向内置的 `warp` 和 `grok2api`。
 
 ## 5. 先做一次命令行验证
 

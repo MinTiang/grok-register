@@ -136,20 +136,57 @@ def init_db() -> None:
 def load_source_defaults() -> dict[str, Any]:
     config_path = SOURCE_PROJECT / "config.json"
     if config_path.exists():
-        return json.loads(config_path.read_text(encoding="utf-8"))
-    example_path = SOURCE_PROJECT / "config.example.json"
-    if example_path.exists():
-        return json.loads(example_path.read_text(encoding="utf-8"))
-    return {
-        "run": {"count": 50},
-        "proxy": "",
-        "browser_proxy": "",
-        "temp_mail_api_base": "",
-        "temp_mail_admin_password": "",
-        "temp_mail_domain": "",
-        "temp_mail_site_password": "",
-        "api": {"endpoint": "", "token": "", "append": True},
+        base = json.loads(config_path.read_text(encoding="utf-8"))
+    else:
+        example_path = SOURCE_PROJECT / "config.example.json"
+        if example_path.exists():
+            base = json.loads(example_path.read_text(encoding="utf-8"))
+        else:
+            base = {
+                "run": {"count": 50},
+                "proxy": "",
+                "browser_proxy": "",
+                "temp_mail_api_base": "",
+                "temp_mail_admin_password": "",
+                "temp_mail_domain": "",
+                "temp_mail_site_password": "",
+                "api": {"endpoint": "", "token": "", "append": True},
+            }
+
+    env_count = os.getenv("GROK_REGISTER_DEFAULT_RUN_COUNT", "").strip()
+    if env_count:
+        try:
+            base.setdefault("run", {})["count"] = max(1, int(env_count))
+        except ValueError:
+            pass
+
+    env_map = {
+        "proxy": "GROK_REGISTER_DEFAULT_PROXY",
+        "browser_proxy": "GROK_REGISTER_DEFAULT_BROWSER_PROXY",
+        "temp_mail_api_base": "GROK_REGISTER_DEFAULT_TEMP_MAIL_API_BASE",
+        "temp_mail_admin_password": "GROK_REGISTER_DEFAULT_TEMP_MAIL_ADMIN_PASSWORD",
+        "temp_mail_domain": "GROK_REGISTER_DEFAULT_TEMP_MAIL_DOMAIN",
+        "temp_mail_site_password": "GROK_REGISTER_DEFAULT_TEMP_MAIL_SITE_PASSWORD",
     }
+    for key, env_name in env_map.items():
+        value = os.getenv(env_name)
+        if value is not None:
+            base[key] = value
+
+    api_base = dict(base.get("api") or {})
+    api_env_map = {
+        "endpoint": "GROK_REGISTER_DEFAULT_API_ENDPOINT",
+        "token": "GROK_REGISTER_DEFAULT_API_TOKEN",
+    }
+    for key, env_name in api_env_map.items():
+        value = os.getenv(env_name)
+        if value is not None:
+            api_base[key] = value
+    append_env = os.getenv("GROK_REGISTER_DEFAULT_API_APPEND")
+    if append_env is not None:
+        api_base["append"] = append_env.strip().lower() in {"1", "true", "yes", "on"}
+    base["api"] = api_base
+    return base
 
 
 class TaskCreate(BaseModel):

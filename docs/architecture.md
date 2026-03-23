@@ -44,6 +44,8 @@
 - 为浏览器和邮箱 API 提供出口
 - 在业务开始前确认网络出口可用
 
+当前一体化部署里，它由根目录 [docker-compose.yml](../docker-compose.yml) 中的 `warp` 服务提供。
+
 ### 4. token-sink
 
 位置：[apps/token-sink](../apps/token-sink)
@@ -53,6 +55,8 @@
 - 接收注册成功后的 token
 - 与 `grok2api` 这类消费端对接
 - 做去重、落池和结果校验
+
+当前一体化部署里，它由根目录 [docker-compose.yml](../docker-compose.yml) 中的 `grok2api` 服务提供。
 
 ### 5. worker-runtime
 
@@ -74,9 +78,9 @@
 
 当前仓库已经能完成下面的完整链路：
 
-1. `network-gateway` 提供可用出口
+1. `warp` 提供默认网络出口
 2. `console` 创建任务并写入任务级 `config.json`
 3. `register-runner` 独立执行注册流程
 4. 成功后将 `sso` 追加写入本地文件
-5. 同时把 `sso` 推送到 `api.endpoint`
+5. 同时把 `sso` 推送到内置 `grok2api`
 6. `console` 持续从日志解析实时状态并展示

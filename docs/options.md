@@ -24,6 +24,7 @@
 
 - `http://127.0.0.1:18118`
 - `socks5://127.0.0.1:1080`
+- `socks5://warp:1080`
 
 ## proxy
 
@@ -72,7 +73,8 @@
 
 典型示例：
 
-- `http://127.0.0.1:18000/api/v1/admin/tokens`
+- `http://127.0.0.1:8000/v1/admin/tokens`
+- `http://grok2api:8000/v1/admin/tokens`
 
 如果留空，任务仍然能注册，但不会自动入池。
 

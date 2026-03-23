@@ -1,4 +1,16 @@
 services:
+  warp:
+    extends:
+      file: ../docker-compose.yml
+      service: warp
+    restart: unless-stopped
+
+  grok2api:
+    extends:
+      file: ../docker-compose.yml
+      service: grok2api
+    restart: unless-stopped
+
   console:
     extends:
       file: ../docker-compose.yml
