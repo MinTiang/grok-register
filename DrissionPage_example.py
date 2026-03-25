@@ -89,6 +89,8 @@ co.set_argument("--no-sandbox")
 co.set_argument("--disable-gpu")
 co.set_argument("--disable-dev-shm-usage")
 co.set_argument("--disable-software-rasterizer")
+if not os.environ.get("DISPLAY"):
+    co.set_argument("--headless=new")
 
 # 从 config.json 读取代理配置给浏览器
 _browser_proxy = ""
@@ -109,15 +111,18 @@ if _browser_proxy:
 import platform
 import shutil
 import glob as _glob_mod
+_linux_browser_path = ""
 if platform.system() == "Linux":
     # 优先用 playwright 装的 chromium（无 AppArmor 限制）
     _pw_chromes = _glob_mod.glob(os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome"))
     if _pw_chromes:
-        co.set_browser_path(_pw_chromes[0])
+        _linux_browser_path = _pw_chromes[0]
+        co.set_browser_path(_linux_browser_path)
     else:
         for _candidate in ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]:
             if os.path.isfile(_candidate):
-                co.set_browser_path(_candidate)
+                _linux_browser_path = _candidate
+                co.set_browser_path(_linux_browser_path)
                 break
     # user_data_path 在 start_browser() 每轮动态设置，此处不固定
 
@@ -141,6 +146,13 @@ DEFAULT_SSO_FILE = os.path.join(_sso_dir, f"sso_{_sso_ts}.txt")
 def start_browser():
     # 每轮从全新浏览器开始，使用独立临时 profile 目录避免 Cookie/Session 复用。
     global browser, page, _chrome_temp_dir
+    if platform.system() == "Linux" and not _linux_browser_path:
+        raise RuntimeError(
+            "未找到 Chrome/Chromium。请先安装浏览器后再运行。"
+            "宿主机至少需要安装以下依赖："
+            "`pip install -r requirements.txt`、`apt install xvfb`、"
+            "`apt install chromium-browser` 或 `apt install google-chrome-stable`。"
+        )
     _chrome_temp_dir = tempfile.mkdtemp(prefix="chrome_run_")
     co.set_user_data_path(_chrome_temp_dir)
     browser = Chromium(co)

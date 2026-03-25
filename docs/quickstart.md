@@ -36,8 +36,14 @@ python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
 sudo apt-get update
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb chromium-browser
 ```
+
+说明：
+
+- `requirements.txt` 已包含 `pyvirtualdisplay`
+- 如果你的系统没有 `chromium-browser` 包，就改装 `google-chrome-stable`
+- 这 3 个依赖少一个，宿主机模式都可能报浏览器连接失败
 
 ## 3. Docker 一键启动控制台
 
@@ -98,6 +104,18 @@ cd /home/codex/grok-register
 . .venv/bin/activate
 python DrissionPage_example.py --count 1
 ```
+
+如果这里报：
+
+- `No module named pyvirtualdisplay`
+- `浏览器连接失败`
+- `127.0.0.1:9222 浏览器连接失败`
+
+优先检查是不是少装了：
+
+- `pip install -r requirements.txt`
+- `apt install xvfb`
+- `apt install chromium-browser` 或 `google-chrome-stable`
 
 只要这一步能成功产出 `sso/*.txt`，说明注册执行链路已经基本通了。
 

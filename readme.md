@@ -63,10 +63,18 @@ cp config.example.json config.json
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
+sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb chromium-browser
 ./deploy/start-console.sh
 ```
 
 默认监听 `0.0.0.0:18600`。
+
+宿主机模式最容易漏的就是浏览器依赖，至少补齐这 3 项：
+
+- `pip install -r requirements.txt`，这里已经包含 `pyvirtualdisplay`
+- `apt install xvfb`
+- `apt install chromium-browser` 或自行安装 `google-chrome-stable`
 
 如果你只想先把内置网络和 sink 起起来，也可以执行：
 
@@ -84,6 +92,8 @@ cp config.example.json config.json
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
+sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb chromium-browser
 python DrissionPage_example.py --count 1
 ```
 
