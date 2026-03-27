@@ -9,29 +9,36 @@ services:
     ports:
       - "127.0.0.1:1080:1080"
 
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    restart: unless-stopped
+    shm_size: 1gb
+    depends_on:
+      - warp
+
   grok2api:
-    image: ghcr.io/chenyme/grok2api:latest
-    working_dir: /app
-    command: ["/bin/sh", "/workspace/deploy/grok2api-entrypoint.sh"]
+    build:
+      context: ./vendor/grok2api
+      dockerfile: Dockerfile
+    image: grok2api-upstream:latest
     environment:
+      TZ: Asia/Shanghai
       DATA_DIR: /app/data
-      LOG_DIR: /app/logs
       SERVER_HOST: 0.0.0.0
       SERVER_PORT: 8000
       SERVER_WORKERS: 1
-      GROK2API_APP_KEY: ${GROK2API_APP_KEY:-change-this-admin-password}
-      GROK2API_API_KEY: ${GROK2API_API_KEY:-}
-      GROK2API_BASE_PROXY_URL: ${GROK2API_BASE_PROXY_URL:-socks5://warp:1080}
-      GROK2API_ASSET_PROXY_URL: ${GROK2API_ASSET_PROXY_URL:-socks5://warp:1080}
+      FLARESOLVERR_URL: ${FLARESOLVERR_URL:-http://flaresolverr:8191}
+      CF_REFRESH_INTERVAL: ${CF_REFRESH_INTERVAL:-600}
+      CF_TIMEOUT: ${CF_TIMEOUT:-60}
     ports:
       - "${GROK2API_HOST_PORT:-8000}:8000"
     volumes:
       - ./runtime/grok2api/data:/app/data
       - ./runtime/grok2api/logs:/app/logs
-      - .:/workspace
     restart: unless-stopped
     depends_on:
       - warp
+      - flaresolverr
 
   console:
     build:
