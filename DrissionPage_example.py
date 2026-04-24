@@ -109,8 +109,12 @@ try:
 except Exception:
     pass
 if _browser_proxy:
-    co.set_proxy(_browser_proxy)
-    print(f"[*] 娴忚鍣ㄤ唬鐞? {_browser_proxy}")
+    _proxy_scheme = str(_browser_proxy).split("://", 1)[0].lower()
+    if _proxy_scheme.startswith("socks"):
+        print(f"[Warn] 当前浏览器环境暂不支持 {_proxy_scheme} 代理，已跳过 browser_proxy: {_browser_proxy}")
+    else:
+        co.set_proxy(_browser_proxy)
+        print(f"[*] 浏览器代理: {_browser_proxy}")
 
 # Linux 鏈嶅姟鍣ㄨ嚜鍔ㄦ娴?chromium 璺緞
 import platform
@@ -1403,6 +1407,20 @@ def _turnstile_log(stage: str, started_at: float, detail: str = "") -> None:
     print(message)
 
 
+def _safe_ele(owner: Any, locator: str, timeout: float = 0.6):
+    if owner is None:
+        return None
+    try:
+        return owner.ele(locator, timeout=timeout)
+    except TypeError:
+        try:
+            return owner.ele(locator)
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+
 def fill_email_and_submit(timeout=15):
     email, dev_token = get_email_and_token()
     if not email or not dev_token:
@@ -2336,11 +2354,11 @@ return {
 
             try:
                 locate_started_at = time.perf_counter()
-                challenge_solution = page.ele("@name=cf-turnstile-response")
+                challenge_solution = _safe_ele(page, "@name=cf-turnstile-response", timeout=0.5)
                 challenge_wrapper = challenge_solution.parent() if challenge_solution else None
                 challenge_iframe = None
                 if challenge_wrapper and challenge_wrapper.shadow_root:
-                    challenge_iframe = challenge_wrapper.shadow_root.ele("tag:iframe")
+                    challenge_iframe = _safe_ele(challenge_wrapper.shadow_root, "tag:iframe", timeout=0.5)
                 locate_cost_ms = int((time.perf_counter() - locate_started_at) * 1000)
                 _turnstile_log(
                     "locate",
@@ -2369,8 +2387,9 @@ Object.defineProperty(MouseEvent.prototype, 'screenY', { value: screenY });
                 _turnstile_log("patch", started_at, f"attempt={attempt} local_try={local_try} cost={patch_cost_ms}ms")
 
                 click_started_at = time.perf_counter()
-                challenge_body = challenge_iframe.ele("tag:body").shadow_root
-                challenge_button = challenge_body.ele("tag:input") if challenge_body else None
+                challenge_body_host = _safe_ele(challenge_iframe, "tag:body", timeout=0.5)
+                challenge_body = challenge_body_host.shadow_root if challenge_body_host else None
+                challenge_button = _safe_ele(challenge_body, "tag:input", timeout=0.35) if challenge_body else None
                 if not challenge_button:
                     _turnstile_log("button-missing", started_at, f"attempt={attempt} local_try={local_try}")
                     time.sleep(0.2)
@@ -2462,7 +2481,7 @@ def _call_with_hard_timeout(func: Callable[[], Any], timeout: float, label: str)
 _REAL_GET_TURNSTILE_TOKEN = getTurnstileToken
 
 
-def getTurnstileToken(timeout: float = 20.0):
+def getTurnstileToken(timeout: float = 120.0):
     hard_timeout = max(TURNSTILE_HARD_TIMEOUT, float(timeout) + 10.0)
     return _call_with_hard_timeout(
         lambda: _REAL_GET_TURNSTILE_TOKEN(timeout=timeout),
