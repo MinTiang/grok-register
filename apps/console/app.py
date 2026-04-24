@@ -200,6 +200,52 @@ def _mask_proxy(proxy_url: str) -> str:
     return f"{parsed.scheme}://{host}{port}"
 
 
+def _normalize_api_host(api_host: str) -> str:
+    raw = str(api_host or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return raw
+
+
+def _build_grok_sink_url(api_host: str, path: str) -> str:
+    host = _normalize_api_host(api_host)
+    if not host:
+        return ""
+    return f"{host}{path if path.startswith('/') else '/' + path}"
+
+
+def _extract_grok_sink_tokens(payload: Any) -> tuple[str, list[str]] | None:
+    if isinstance(payload, list):
+        source = payload
+        kind = "new"
+    elif isinstance(payload, dict) and isinstance(payload.get("tokens"), list):
+        source = payload.get("tokens", [])
+        kind = "new"
+    elif isinstance(payload, dict) and isinstance(payload.get("data"), list):
+        source = payload.get("data", [])
+        kind = "new"
+    elif isinstance(payload, dict) and isinstance(payload.get("items"), list):
+        source = payload.get("items", [])
+        kind = "new"
+    elif isinstance(payload, dict) and isinstance(payload.get("tokens"), dict):
+        source = payload["tokens"].get("ssoBasic", [])
+        kind = "compat"
+    elif isinstance(payload, dict) and isinstance(payload.get("ssoBasic"), list):
+        source = payload.get("ssoBasic", [])
+        kind = "legacy"
+    else:
+        return None
+
+    tokens = [
+        item["token"] if isinstance(item, dict) else str(item)
+        for item in source if item
+    ]
+    return kind, tokens
+
+
 def _request_with_optional_proxy(
     url: str,
     proxy_url: str = "",
@@ -246,7 +292,7 @@ def run_health_checks() -> dict[str, Any]:
     browser_proxy = str(defaults.get("browser_proxy", "") or "").strip()
     request_proxy = str(defaults.get("proxy", "") or "").strip()
     api_conf = dict(defaults.get("api") or {})
-    api_endpoint = str(api_conf.get("endpoint", "") or "").strip()
+    api_host = str(api_conf.get("endpoint", "") or "").strip()
     api_token = str(api_conf.get("token", "") or "").strip()
     temp_mail_api_base = str(defaults.get("temp_mail_api_base", "") or "").strip()
 
@@ -299,27 +345,28 @@ def run_health_checks() -> dict[str, Any]:
                 )
             )
 
-    if not api_endpoint:
+    if not api_host:
         items.append(
             _build_health_item(
                 "grok2api",
                 "grok2api Sink",
                 False,
                 "未配置 token sink",
-                "当前系统默认配置里没有 `api.endpoint`，注册成功后不会自动入池。",
+                "当前系统默认配置里没有 `api.endpoint` 主 host，注册成功后不会自动入池。",
                 "-",
             )
         )
     else:
         try:
+            list_url = _build_grok_sink_url(api_host, "/admin/api/tokens")
             api_headers = {"Authorization": f"Bearer {api_token}"} if api_token else None
             response = _request_with_optional_proxy(
-                api_endpoint,
+                list_url,
                 timeout=15,
                 headers=api_headers,
             )
-            ok = response.status_code in {200, 401, 403, 405}
-            detail = "接口已可达。即使返回 401/403/405，也说明服务本身在线，只是需要正确的管理口令。"
+            ok = response.status_code in {200, 401, 403}
+            detail = "接口已可达。即使返回 401/403，也说明服务本身在线，只是需要正确的管理口令。"
 
             if response.status_code == 200:
                 try:
@@ -327,19 +374,19 @@ def run_health_checks() -> dict[str, Any]:
                 except ValueError:
                     payload = None
 
-                if isinstance(payload, dict) and isinstance(payload.get("tokens"), list):
-                    token_count = len([item for item in payload.get("tokens", []) if item])
-                    pool_name = str(payload.get("pool", "") or "auto")
-                    detail = f"已识别为新版 grok2api sink，pool=`{pool_name}`，当前返回 {token_count} 个 token。"
-                elif isinstance(payload, dict) and isinstance(payload.get("tokens"), dict):
-                    token_count = len(payload["tokens"].get("ssoBasic", []) or [])
-                    detail = f"已识别为兼容版 grok2api sink，当前返回 {token_count} 个 ssoBasic token。"
-                elif isinstance(payload, dict) and isinstance(payload.get("ssoBasic"), list):
-                    token_count = len(payload.get("ssoBasic", []) or [])
-                    detail = f"已识别为旧版 grok2api sink，当前返回 {token_count} 个 ssoBasic token。"
+                parsed = _extract_grok_sink_tokens(payload)
+                if parsed:
+                    version, tokens = parsed
+                    pool_name = str(payload.get("pool", "") or "auto") if isinstance(payload, dict) else "auto"
+                    if version == "new":
+                        detail = f"已识别为新版 grok2api sink，GET `{list_url}` 成功，pool=`{pool_name}`，当前返回 {len(tokens)} 个 token。"
+                    elif version == "compat":
+                        detail = f"已识别为兼容版 grok2api sink，GET `{list_url}` 成功，当前返回 {len(tokens)} 个 ssoBasic token。"
+                    else:
+                        detail = f"已识别为旧版 grok2api sink，GET `{list_url}` 成功，当前返回 {len(tokens)} 个 ssoBasic token。"
                 else:
                     ok = False
-                    detail = "接口可达，但返回内容不像当前项目支持的 grok2api token 管理接口。"
+                    detail = f"接口可达，但 `GET {list_url}` 的返回内容不像当前项目支持的 grok2api token 管理接口。"
 
             items.append(
                 _build_health_item(
@@ -348,7 +395,7 @@ def run_health_checks() -> dict[str, Any]:
                     ok,
                     f"HTTP {response.status_code}",
                     detail,
-                    api_endpoint,
+                    list_url,
                 )
             )
         except Exception as exc:
@@ -358,8 +405,8 @@ def run_health_checks() -> dict[str, Any]:
                     "grok2api Sink",
                     False,
                     "接口不可达",
-                    f"访问 `{api_endpoint}` 失败：{exc}",
-                    api_endpoint,
+                    f"访问 `{_build_grok_sink_url(api_host, '/admin/api/tokens')}` 失败：{exc}",
+                    _build_grok_sink_url(api_host, "/admin/api/tokens"),
                 )
             )
 

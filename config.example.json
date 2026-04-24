@@ -9,7 +9,7 @@
     "proxy": "",
     "browser_proxy": "",
     "api": {
-        "endpoint": "http://127.0.0.1:8000/v1/admin/tokens",
+        "endpoint": "http://127.0.0.1:8000",
         "token": "",
         "append": true
     }

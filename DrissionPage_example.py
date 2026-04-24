@@ -1080,13 +1080,48 @@ def append_sso_to_txt(sso_value, output_path=DEFAULT_SSO_FILE):
 
 
 def push_sso_to_api(new_tokens: list):
-    # 推送 SSO token 到 grok2api 管理接口。
-    # append=false：直接将本次 token 列表全量推送（覆盖）。
-    # append=true（默认）：先 GET 查询线上现有 token，合并本次后全量推送。
+    # 只接收主 host，内部固定拼新版 grok2api token 接口。
     import json
+    from urllib.parse import urlparse
     import urllib3
     import requests
+
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    def normalize_api_host(value: str) -> str:
+        raw = str(value or "").strip().rstrip("/")
+        if not raw:
+            return ""
+        parsed = urlparse(raw)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+        return raw
+
+    def build_api_url(api_host: str, path: str) -> str:
+        host = normalize_api_host(api_host)
+        if not host:
+            return ""
+        return f"{host}{path if path.startswith('/') else '/' + path}"
+
+    def extract_existing_tokens(payload) -> list[str] | None:
+        if isinstance(payload, list):
+            source = payload
+        elif isinstance(payload, dict) and isinstance(payload.get("tokens"), list):
+            source = payload.get("tokens", [])
+        elif isinstance(payload, dict) and isinstance(payload.get("data"), list):
+            source = payload.get("data", [])
+        elif isinstance(payload, dict) and isinstance(payload.get("items"), list):
+            source = payload.get("items", [])
+        elif isinstance(payload, dict) and isinstance(payload.get("tokens"), dict):
+            source = payload["tokens"].get("ssoBasic", [])
+        elif isinstance(payload, dict) and isinstance(payload.get("ssoBasic"), list):
+            source = payload.get("ssoBasic", [])
+        else:
+            return None
+        return [
+            item["token"] if isinstance(item, dict) else str(item)
+            for item in source if item
+        ]
 
     config_path = os.path.join(os.path.dirname(__file__), "config.json")
     try:
@@ -1097,47 +1132,35 @@ def push_sso_to_api(new_tokens: list):
         return
 
     api_conf = conf.get("api", {})
-    endpoint = str(api_conf.get("endpoint", "")).strip()
+    api_host = str(api_conf.get("endpoint", "")).strip()
     api_token = str(api_conf.get("token", "")).strip()
     append_mode = api_conf.get("append", True)
 
-    if not endpoint or not api_token:
+    if not api_host or not api_token:
         return
 
+    list_url = build_api_url(api_host, "/admin/api/tokens")
+    add_url = build_api_url(api_host, "/admin/api/tokens/add")
     headers = {
         "Authorization": f"Bearer {api_token}",
         "Content-Type": "application/json",
     }
 
-    tokens_to_push = [t for t in new_tokens if t]
+    tokens_to_push = [str(t).strip() for t in new_tokens if str(t or "").strip()]
+    if not tokens_to_push:
+        return
 
     if append_mode:
         try:
-            get_resp = requests.get(endpoint, headers=headers, timeout=15, verify=False)
+            get_resp = requests.get(list_url, headers=headers, timeout=15, verify=False)
             if get_resp.status_code == 200:
-                data = get_resp.json()
-                # 兼容多种响应格式：
-                # 新版: {"pool": "auto", "tokens": [...]}
-                # 中间版: {"tokens": {"ssoBasic": [...]}}
-                # 旧版: {"ssoBasic": [...]}
-                if isinstance(data, dict) and isinstance(data.get("tokens"), list):
-                    existing = data.get("tokens", [])
-                elif isinstance(data, dict) and isinstance(data.get("tokens"), dict):
-                    existing = data["tokens"].get("ssoBasic", [])
-                else:
-                    existing = data.get("ssoBasic", []) if isinstance(data, dict) else []
-                existing_tokens = [
-                    item["token"] if isinstance(item, dict) else str(item)
-                    for item in existing if item
-                ]
-                seen = set()
-                deduped = []
-                for t in existing_tokens + tokens_to_push:
-                    if t not in seen:
-                        seen.add(t)
-                        deduped.append(t)
-                tokens_to_push = deduped
-                print(f"[*] 查询到线上 {len(existing_tokens)} 个 token，合并本次 {len(new_tokens)} 个，共 {len(deduped)} 个")
+                existing_tokens = extract_existing_tokens(get_resp.json())
+                if existing_tokens is None:
+                    print(f"[Error] 查询线上 token 成功，但返回格式不受支持: {list_url}")
+                    return
+                existing_set = set(existing_tokens)
+                tokens_to_push = [token for token in tokens_to_push if token not in existing_set]
+                print(f"[*] 查询到线上 {len(existing_tokens)} 个 token，本次新增 {len(new_tokens)} 个，待追加 {len(tokens_to_push)} 个")
             else:
                 print(f"[Error] 查询线上 token 失败: HTTP {get_resp.status_code}，放弃推送以保护存量数据")
                 return
@@ -1145,16 +1168,20 @@ def push_sso_to_api(new_tokens: list):
             print(f"[Error] 查询线上 token 异常: {e}，放弃推送以保护存量数据")
             return
 
+    if not tokens_to_push:
+        print("[*] 本次没有新增 token 需要推送到 API。")
+        return
+
     try:
         resp = requests.post(
-            endpoint,
+            add_url,
             json={"pool": "auto", "tokens": tokens_to_push},
             headers=headers,
             timeout=60,
             verify=False,
         )
-        if resp.status_code == 200:
-            print(f"[*] SSO token 已推送到 API（共 {len(tokens_to_push)} 个）: {endpoint}")
+        if resp.status_code in {200, 201, 204}:
+            print(f"[*] SSO token 已推送到 API（新增 {len(tokens_to_push)} 个）: {add_url}")
         else:
             print(f"[Warn] 推送 API 返回异常: HTTP {resp.status_code} {resp.text[:200]}")
     except Exception as e:
