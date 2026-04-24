@@ -1876,7 +1876,7 @@ Object.defineProperty(MouseEvent.prototype, 'screenY', { value: screenY });
 
         time.sleep(_turnstile_poll_interval(started_at))
 
-    raise Exception(f"Turnstile 澶勭悊瓒呮椂锛坽timeout:.1f}s锛夛紝鏈€鍚庨敊璇? {last_error or 'none'}")
+    raise Exception(f"Turnstile 处理超时（{timeout:.1f}s），最后错误: {last_error or 'none'}")
 
 
 def fill_profile_and_submit(timeout=30):
