@@ -703,8 +703,19 @@ Object.defineProperty(MouseEvent.prototype, 'screenY', { value: screenY });
 
 def build_profile():
     # 生成一组可重复使用的注册资料，密码至少包含大小写、数字和特殊字符。
-    given_name = "Neo"
-    family_name = "Lin"
+    given_names = [
+        "Ethan", "Noah", "Liam", "Owen", "Mason",
+        "Lucas", "Leo", "Ryan", "Evan", "Aiden",
+        "Mia", "Emma", "Lily", "Chloe", "Grace",
+        "Nora", "Zoe", "Alice", "Ella", "Ruby",
+    ]
+    family_names = [
+        "Smith", "Johnson", "Brown", "Taylor", "Miller",
+        "Davis", "Wilson", "Moore", "Clark", "Walker",
+        "Hall", "Young", "King", "Wright", "Scott",
+    ]
+    given_name = secrets.choice(given_names)
+    family_name = secrets.choice(family_names)
     password = "N" + secrets.token_hex(4) + "!a7#" + secrets.token_urlsafe(6)
     return given_name, family_name, password
 
