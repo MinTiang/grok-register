@@ -1,5 +1,5 @@
 from DrissionPage import Chromium, ChromiumOptions
-from DrissionPage.errors import PageDisconnectedError
+from DrissionPage.errors import ContextLostError, PageDisconnectedError
 import argparse
 import shutil
 import tempfile
@@ -177,19 +177,20 @@ def stop_browser():
 
 
 def restart_browser():
-    # 清除 cookie/storage 代替完整重启，节省 Chrome 冷启动时间。
+    # 每轮结束后做一次硬重启，避免注册成功后页面跳转导致旧上下文失效。
     global browser, page
-    if browser is None:
-        start_browser()
-        return
     try:
-        tabs = browser.get_tabs()
-        page = tabs[-1] if tabs else browser.new_tab()
-        page.run_js("window.localStorage.clear(); window.sessionStorage.clear();")
-        page.clear_cache(session_storage=True, cookies=True)
-    except Exception:
         stop_browser()
+    except Exception:
+        browser = None
+        page = None
+
+    try:
         start_browser()
+    except Exception as e:
+        print(f"[Warn] 浏览器重启失败，将在下次使用时继续重试: {e}")
+        browser = None
+        page = None
 
 
 def refresh_active_page():
@@ -203,6 +204,8 @@ def refresh_active_page():
             page = tabs[-1]
         else:
             page = browser.new_tab()
+    except (ContextLostError, PageDisconnectedError):
+        restart_browser()
     except Exception:
         restart_browser()
     return page
@@ -398,7 +401,7 @@ return true;
 
 
 def fill_code_and_submit(email, dev_token, timeout=60):
-    # 复用 `email_register.py` 里的验证码轮询逻辑，等待邮件到达后自动填写 OTP。
+    # 轮询邮箱验证码，并在页面上完成 OTP 输入与确认。
     code = get_oai_code(dev_token, email)
     if not code:
         raise Exception("获取验证码失败")
@@ -466,35 +469,19 @@ const otpBoxes = Array.from(document.querySelectorAll('input')).filter((node) =>
     return maxLength === 1 || autocomplete === 'one-time-code';
 });
 
-if (!input && otpBoxes.length < code.length) {
-    return 'not-ready';
-}
-
 if (input) {
     input.focus();
     input.click();
     setNativeValue(input, code);
     dispatchInputEvents(input, code);
-
-    const normalizedValue = String(input.value || '').trim();
-    const expectedLength = Number(input.maxLength || code.length || 6);
-    const slots = Array.from(document.querySelectorAll('[data-input-otp-slot="true"]'));
-    const filledSlots = slots.filter((slot) => (slot.textContent || '').trim()).length;
-
-    if (normalizedValue !== code) {
-        return 'aggregate-mismatch';
-    }
-
-    if (expectedLength > 0 && normalizedValue.length !== expectedLength) {
-        return 'aggregate-length-mismatch';
-    }
-
-    if (slots.length && filledSlots && filledSlots !== normalizedValue.length) {
-        return 'aggregate-slot-mismatch';
-    }
-
     input.blur();
-    return 'filled';
+
+    const merged = String(input.value || '').trim();
+    return merged === code ? 'filled' : 'aggregate-mismatch';
+}
+
+if (!otpBoxes.length) {
+    return 'not-ready';
 }
 
 const orderedBoxes = otpBoxes.slice(0, code.length);
@@ -515,8 +502,7 @@ return merged === code ? 'filled' : 'box-mismatch';
                 """,
                 code,
             )
-        except PageDisconnectedError:
-            # 点击确认邮箱后如果刚好发生跳转，旧页面句柄会断开；此时切到新页继续判断即可。
+        except (ContextLostError, PageDisconnectedError):
             refresh_active_page()
             if has_profile_form():
                 print("[*] 验证码提交后已跳转到最终注册页。")
@@ -524,23 +510,22 @@ return merged === code ? 'filled' : 'box-mismatch';
             time.sleep(1)
             continue
 
-        if filled == 'not-ready':
+        if filled == "not-ready":
             if has_profile_form():
                 print("[*] 已直接进入最终注册页，跳过验证码按钮确认。")
                 return code
             time.sleep(0.5)
             continue
 
-        if filled != 'filled':
+        if filled != "filled":
             print(f"[Debug] 验证码输入框已出现，但写入失败: {filled}")
             time.sleep(0.5)
             continue
 
-        if filled == 'filled':
-            time.sleep(1.2)
-            try:
-                clicked = page.run_js(
-                    r"""
+        time.sleep(1.2)
+        try:
+            clicked = page.run_js(
+                r"""
 function isVisible(node) {
     if (!node) {
         return false;
@@ -592,7 +577,17 @@ const buttons = Array.from(document.querySelectorAll('button[type="submit"], but
 });
 const confirmButton = buttons.find((node) => {
     const text = (node.innerText || node.textContent || '').replace(/\s+/g, '');
-    const t = text.toLowerCase(); return text === '确认邮箱' || text.includes('确认邮箱') || text === '继续' || text.includes('继续') || text === '下一步' || text.includes('下一步') || t.includes('confirm') || t.includes('continue') || t.includes('next') || t.includes('verify');
+    const t = text.toLowerCase();
+    return text === '确认邮箱'
+        || text.includes('确认邮箱')
+        || text === '继续'
+        || text.includes('继续')
+        || text === '下一步'
+        || text.includes('下一步')
+        || t.includes('confirm')
+        || t.includes('continue')
+        || t.includes('next')
+        || t.includes('verify');
 });
 
 if (!confirmButton) {
@@ -602,37 +597,35 @@ if (!confirmButton) {
 confirmButton.focus();
 confirmButton.click();
 return 'clicked';
-                    """
-                )
-            except PageDisconnectedError:
-                refresh_active_page()
-                if has_profile_form():
-                    print("[*] 确认邮箱后页面跳转成功，已进入最终注册页。")
-                    return code
-                clicked = 'disconnected'
-
-            if clicked == 'clicked':
-                print(f"[*] 已填写验证码并点击确认邮箱: {code}")
-                time.sleep(2)
-                refresh_active_page()
-                if has_profile_form():
-                    print("[*] 验证码确认完成，最终注册页已就绪。")
+                """
+            )
+        except (ContextLostError, PageDisconnectedError):
+            refresh_active_page()
+            if has_profile_form():
+                print("[*] 确认邮箱后页面跳转成功，已进入最终注册页。")
                 return code
+            time.sleep(1)
+            continue
 
-            if clicked == 'no-button':
-                current_url = page.url
-                if 'sign-up' in current_url or 'signup' in current_url:
-                    print(f"[*] 已填写验证码，页面已自动跳转到下一步: {current_url}")
-                    return code
+        if clicked == "clicked":
+            print(f"[*] 已填写验证码并点击确认邮箱: {code}")
+            time.sleep(2)
+            refresh_active_page()
+            if has_profile_form():
+                print("[*] 验证码确认完成，最终注册页已就绪。")
+            return code
 
-            if clicked == 'disconnected':
-                time.sleep(1)
-                continue
+        if clicked == "no-button":
+            current_url = page.url
+            if "sign-up" in current_url or "signup" in current_url:
+                print(f"[*] 已填写验证码，页面已自动跳转到下一步: {current_url}")
+                return code
 
         time.sleep(0.5)
 
-    debug_snapshot = page.run_js(
-        r"""
+    try:
+        debug_snapshot = page.run_js(
+            r"""
 function isVisible(node) {
     if (!node) {
         return false;
@@ -661,9 +654,11 @@ const buttons = Array.from(document.querySelectorAll('button')).filter(isVisible
 }));
 
 return { url: location.href, inputs, buttons };
-        """
-    )
-    print(f"[Debug] 验证码页 DOM 摘要: {debug_snapshot}")
+            """
+        )
+        print(f"[Debug] 验证码页 DOM 摘要: {debug_snapshot}")
+    except Exception as e:
+        print(f"[Debug] 验证码页 DOM 摘要获取失败: {e}")
     raise Exception("未找到验证码输入框或确认邮箱按钮")
 
 
@@ -909,9 +904,10 @@ return String(challengeInput.value || '').trim() === String(token || '').trim();
         except Exception:
             submit_button = None
 
-        if not submit_button:
-            clicked = page.run_js(
-                r"""
+        try:
+            if not submit_button:
+                clicked = page.run_js(
+                    r"""
 const challengeInput = document.querySelector('input[name="cf-turnstile-response"]');
 if (challengeInput && !String(challengeInput.value || '').trim()) {
     return false;
@@ -927,20 +923,31 @@ if (!submitButton || submitButton.disabled || submitButton.getAttribute('aria-di
 submitButton.focus();
 submitButton.click();
 return true;
-                """
-            )
-        else:
-            challenge_value = page.run_js(
-                """
+                    """
+                )
+            else:
+                challenge_value = page.run_js(
+                    """
 const challengeInput = document.querySelector('input[name="cf-turnstile-response"]');
 return challengeInput ? String(challengeInput.value || '').trim() : 'not-found';
-                """
-            )
-            if challenge_value not in ('not-found', ''):
-                submit_button.click()
-                clicked = True
-            else:
-                clicked = False
+                    """
+                )
+                if challenge_value not in ('not-found', ''):
+                    submit_button.click()
+                    clicked = True
+                else:
+                    clicked = False
+        except (ContextLostError, PageDisconnectedError):
+            refresh_active_page()
+            if has_profile_form():
+                time.sleep(0.5)
+                continue
+            print("[*] 最终注册提交后页面已刷新，继续等待 sso cookie。")
+            return {
+                "given_name": given_name,
+                "family_name": family_name,
+                "password": password,
+            }
 
         if clicked:
             print(f"[*] 已填写注册资料并点击完成注册: {given_name} {family_name} / {password}")
@@ -1049,7 +1056,7 @@ def wait_for_sso_cookie(timeout=30):
                     print("[*] 注册完成后已获取到 sso cookie。")
                     return value
 
-        except PageDisconnectedError:
+        except (ContextLostError, PageDisconnectedError):
             refresh_active_page()
         except Exception:
             pass
@@ -1247,3 +1254,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
