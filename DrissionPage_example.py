@@ -71,7 +71,7 @@ def ensure_stable_python_runtime():
 def warn_runtime_compatibility():
     # 涓枃鎻愮ず锛氶伩鍏嶆妸搴曞眰 TLS 鍏煎闂璇垽鎴愯剼鏈€昏緫閿欒銆?
     if sys.version_info >= (3, 14):
-        print("[鎻愮ず] 褰撳墠 Python 涓?3.14+锛涜嫢鍑虹幇 Mail.tm TLS 寮傚父锛屽缓璁敼鐢?Python 3.12 鎴?3.13銆?)
+        print("[提示] 当前 Python 为 3.14+，若出现 Mail.tm TLS 异常，建议改用 Python 3.12 或 3.13。")
 
 
 ensure_stable_python_runtime()
@@ -153,10 +153,10 @@ def start_browser():
     global browser, page, _chrome_temp_dir
     if platform.system() == "Linux" and not _linux_browser_path:
         raise RuntimeError(
-            "鏈壘鍒?Chrome/Chromium銆傝鍏堝畨瑁呮祻瑙堝櫒鍚庡啀杩愯銆?
-            "瀹夸富鏈鸿嚦灏戦渶瑕佸畨瑁呬互涓嬩緷璧栵細"
-            "`pip install -r requirements.txt`銆乣apt install xvfb`銆?
-            "`apt install chromium-browser` 鎴?`apt install google-chrome-stable`銆?
+            "未找到 Chrome/Chromium。请先安装浏览器后再运行。"
+            "宿主机至少需要安装以下依赖："
+            "`pip install -r requirements.txt`、`apt install xvfb`、"
+            "`apt install chromium-browser` 或 `apt install google-chrome-stable`。"
         )
     _chrome_temp_dir = tempfile.mkdtemp(prefix="chrome_run_")
     co.set_user_data_path(_chrome_temp_dir)
@@ -272,7 +272,7 @@ return true;
 
         time.sleep(0.5)
 
-    raise Exception('鏈壘鍒扳€滀娇鐢ㄩ偖绠辨敞鍐屸€濇寜閽?)
+    raise Exception('未找到“使用邮箱注册”按钮')
 
 
 def fill_email_and_submit(timeout=15):
@@ -400,14 +400,14 @@ return true;
 
         time.sleep(0.5)
 
-    raise Exception("鏈壘鍒伴偖绠辫緭鍏ユ鎴栨敞鍐屾寜閽?)
+    raise Exception("未找到邮箱输入框或注册按钮")
 
 
 
 def fill_code_and_submit(email, dev_token, timeout=60):
     # 杞閭楠岃瘉鐮侊紝骞跺湪椤甸潰涓婂畬鎴?OTP 杈撳叆涓庣‘璁ゃ€?    code = get_oai_code(dev_token, email)
     if not code:
-        raise Exception("鑾峰彇楠岃瘉鐮佸け璐?)
+        raise Exception("获取验证码失败")
 
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -508,14 +508,14 @@ return merged === code ? 'filled' : 'box-mismatch';
         except (ContextLostError, PageDisconnectedError):
             refresh_active_page()
             if has_profile_form():
-                print("[*] 楠岃瘉鐮佹彁浜ゅ悗宸茶烦杞埌鏈€缁堟敞鍐岄〉銆?)
+                print("[*] 验证码提交后已跳转到最终注册页。")
                 return code
             time.sleep(0.4)
             continue
 
         if filled == "not-ready":
             if has_profile_form():
-                print("[*] 宸茬洿鎺ヨ繘鍏ユ渶缁堟敞鍐岄〉锛岃烦杩囬獙璇佺爜鎸夐挳纭銆?)
+                print("[*] 已直接进入最终注册页，跳过验证码确认。")
                 return code
             time.sleep(0.25)
             continue
@@ -585,8 +585,8 @@ const confirmButton = buttons.find((node) => {
         || text.includes('纭閭')
         || text === '缁х画'
         || text.includes('缁х画')
-        || text === '涓嬩竴姝?
-        || text.includes('涓嬩竴姝?)
+        || text === '下一步'
+        || text.includes('下一步')
         || t.includes('confirm')
         || t.includes('continue')
         || t.includes('next')
@@ -605,17 +605,17 @@ return 'clicked';
         except (ContextLostError, PageDisconnectedError):
             refresh_active_page()
             if has_profile_form():
-                print("[*] 纭閭鍚庨〉闈㈣烦杞垚鍔燂紝宸茶繘鍏ユ渶缁堟敞鍐岄〉銆?)
+                print("[*] 确认邮箱后页面跳转成功，已进入最终注册页。")
                 return code
             time.sleep(0.4)
             continue
 
         if clicked == "clicked":
-            print(f"[*] 宸插～鍐欓獙璇佺爜骞剁偣鍑荤‘璁ら偖绠? {code}")
+            print(f"[*] 已填写验证码并点击确认邮箱: {code}")
             time.sleep(0.8)
             refresh_active_page()
             if has_profile_form():
-                print("[*] 楠岃瘉鐮佺‘璁ゅ畬鎴愶紝鏈€缁堟敞鍐岄〉宸插氨缁€?)
+                print("[*] 验证码确认完成，最终注册页已就绪。")
             return code
 
         if clicked == "no-button":
@@ -869,7 +869,7 @@ return String(givenInput.value || '').trim() === String(expectedGiven || '').tri
             password,
         )
         if not values_ok:
-            print("[Debug] 鏈€缁堟敞鍐岄〉瀛楁鍊兼牎楠屽け璐ワ紝缁х画閲嶈瘯濉啓銆?)
+            print("[Debug] 最终注册页字段值校验失败，继续重试填写。")
             time.sleep(0.25)
             continue
 
@@ -885,7 +885,7 @@ return value ? 'ready' : 'pending';
         )
 
         if turnstile_state == "pending" and not turnstile_token:
-            print("[*] 妫€娴嬪埌鏈€缁堟敞鍐岄〉瀛樺湪 Turnstile锛屽紑濮嬩娇鐢ㄧ幇鏈夌湡浜哄寲鐐瑰嚮閫昏緫銆?)
+            print("[*] 检测到最终注册页存在 Turnstile，开始使用现有真人化点击逻辑。")
             turnstile_token = getTurnstileToken()
             if turnstile_token:
                 synced = page.run_js(
@@ -908,7 +908,7 @@ return String(challengeInput.value || '').trim() === String(token || '').trim();
                     turnstile_token,
                 )
                 if synced:
-                    print("[*] Turnstile 鍝嶅簲宸插悓姝ュ埌鏈€缁堟敞鍐岃〃鍗曘€?)
+                    print("[*] Turnstile 响应已同步到最终注册表单。")
 
         time.sleep(0.5)
 
@@ -955,7 +955,7 @@ return challengeInput ? String(challengeInput.value || '').trim() : 'not-found';
             if has_profile_form():
                 time.sleep(0.25)
                 continue
-            print("[*] 鏈€缁堟敞鍐屾彁浜ゅ悗椤甸潰宸插埛鏂帮紝缁х画绛夊緟 sso cookie銆?)
+            print("[*] 最终注册提交后页面已刷新，继续等待 sso cookie。")
             return {
                 "given_name": given_name,
                 "family_name": family_name,
@@ -1038,7 +1038,7 @@ return matches.slice(0, 30);
 
         time.sleep(1)
 
-    raise Exception("鐧诲綍鍚庢湭鎻愬彇鍒板彲瑙佹暟瀛楁枃鏈?)
+    raise Exception("登录后未提取到可见数字文本")
 
 
 def wait_for_sso_cookie(timeout=30):
@@ -1066,7 +1066,7 @@ def wait_for_sso_cookie(timeout=30):
                     last_seen_names.add(name)
 
                 if name == "sso" and value:
-                    print("[*] 娉ㄥ唽瀹屾垚鍚庡凡鑾峰彇鍒?sso cookie銆?)
+                    print("[*] 注册完成后已获取到 sso cookie。")
                     return value
 
         except (ContextLostError, PageDisconnectedError):
@@ -1160,7 +1160,7 @@ def push_sso_to_api(new_tokens: list):
         return
 
     if not tokens_to_push:
-        print("[*] 鏈娌℃湁鏂板 token 闇€瑕佹帹閫佸埌 API銆?)
+        print("[*] 本次没有新增 token 需要推送到 API。")
         return
 
     try:
@@ -1232,10 +1232,10 @@ def main():
 
     config_count = load_run_count()
 
-    parser = argparse.ArgumentParser(description="xAI 鑷姩娉ㄥ唽骞堕噰闆?sso")
-    parser.add_argument("--count", type=int, default=config_count, help=f"鎵ц杞暟锛? 琛ㄧず鏃犻檺寰幆锛堥粯璁よ鍙?config.json run.count锛屽綋鍓?{config_count}锛?)
-    parser.add_argument("--output", default=DEFAULT_SSO_FILE, help="sso 杈撳嚭 txt 璺緞")
-    parser.add_argument("--extract-numbers", action="store_true", help="娉ㄥ唽瀹屾垚鍚庨澶栨彁鍙栭〉闈㈡暟瀛楁枃鏈?)
+    parser = argparse.ArgumentParser(description="xAI 自动注册并采集 sso")
+    parser.add_argument("--count", type=int, default=config_count, help=f"执行轮数，0 表示无限循环（默认读取 config.json run.count，当前 {config_count}）")
+    parser.add_argument("--output", default=DEFAULT_SSO_FILE, help="sso 输出 txt 路径")
+    parser.add_argument("--extract-numbers", action="store_true", help="注册完成后额外提取页面数字文本")
     args = parser.parse_args()
 
     current_round = 0
@@ -1247,23 +1247,23 @@ def main():
                 break
 
             current_round += 1
-            print(f"\n[*] 寮€濮嬬 {current_round} 杞敞鍐?)
+            print(f"\n[*] 开始第 {current_round} 轮注册")
             round_succeeded = False
 
             try:
                 result = run_single_registration(args.output, extract_numbers=args.extract_numbers)
                 success_count += 1
                 round_succeeded = True
-                print(f"[*] 绗?{current_round} 杞敞鍐屾垚鍔燂紝绔嬪嵆鎺ㄩ€佸綋鍓?token 鍒?API...")
+                print(f"[*] 第 {current_round} 轮注册成功，立即推送当前 token 到 API...")
                 try:
                     push_sso_to_api([result["sso"]])
                 except Exception as push_error:
-                    print(f"[Warn] 褰撳墠 token 绔嬪嵆鎺ㄩ€佸け璐ワ紝浣嗕笉浼氬奖鍝嶅悗缁换鍔? {push_error}")
+                    print(f"[Warn] 当前 token 立即推送失败，但不影响后续任务: {push_error}")
             except KeyboardInterrupt:
-                print("\n[Info] 鏀跺埌涓柇淇″彿锛屽仠姝㈠悗缁疆娆°€?)
+                print("\n[Info] 收到中断信号，停止后续轮次。")
                 break
             except Exception as error:
-                print(f"[Error] 绗?{current_round} 杞け璐? {error}")
+                print(f"[Error] 第 {current_round} 轮失败: {error}")
             finally:
                 if args.count == 0 or current_round < args.count:
                     stop_browser()
@@ -1273,7 +1273,7 @@ def main():
 
     finally:
         if success_count:
-            print(f"\n[*] 娉ㄥ唽缁撴潫锛屾湰娆″叡鎴愬姛 {success_count} 杞紝token 宸叉寜鎴愬姛杞鍗虫椂鎺ㄩ€併€?)
+            print(f"\n[*] 注册结束，本次共成功 {success_count} 轮，token 已按成功轮次即时推送。")
         stop_browser()
 
 
@@ -1529,13 +1529,13 @@ return true;
             print(f"[*] 宸插～鍐欓偖绠卞苟鐐瑰嚮娉ㄥ唽: {email}")
             return email, dev_token
 
-    raise Exception("鏈壘鍒伴偖绠辫緭鍏ユ鎴栨敞鍐屾寜閽?)
+    raise Exception("未找到邮箱输入框或注册按钮")
 
 
 def fill_code_and_submit(email, dev_token, timeout=60):
     code = get_oai_code(dev_token, email)
     if not code:
-        raise Exception("鑾峰彇楠岃瘉鐮佸け璐?)
+        raise Exception("获取验证码失败")
 
     deadline = time.perf_counter() + timeout
     while time.perf_counter() < deadline:
@@ -1634,13 +1634,13 @@ return merged === code ? 'filled' : 'box-mismatch';
         except (ContextLostError, PageDisconnectedError):
             refresh_active_page()
             if has_profile_form():
-                print("[*] 楠岃瘉鐮佹彁浜ゅ悗宸茶烦杞埌鏈€缁堟敞鍐岄〉銆?)
+                print("[*] 验证码提交后已跳转到最终注册页。")
                 return code
             continue
 
         if filled == "not-ready":
             if has_profile_form():
-                print("[*] 宸茬洿鎺ヨ繘鍏ユ渶缁堟敞鍐岄〉锛岃烦杩囬獙璇佺爜纭銆?)
+                print("[*] 已直接进入最终注册页，跳过验证码确认。")
                 return code
             time.sleep(0.15)
             continue
@@ -1700,8 +1700,8 @@ const confirmButton = buttons.find((node) => {
         || text.includes('纭閭')
         || text === '缁х画'
         || text.includes('缁х画')
-        || text === '涓嬩竴姝?
-        || text.includes('涓嬩竴姝?)
+        || text === '下一步'
+        || text.includes('下一步')
         || text.includes('confirm')
         || text.includes('continue')
         || text.includes('next')
@@ -1725,13 +1725,13 @@ return 'clicked';
         if click_result == "no-button":
             refresh_active_page()
             if has_profile_form() or not otp_form_visible():
-                print(f"[*] 宸插～鍐欓獙璇佺爜锛岄〉闈㈠凡鑷姩杩涘叆涓嬩竴姝? {page.url}")
+                print(f"[*] 已填写验证码，页面已自动进入下一步: {page.url}")
                 return code
             time.sleep(0.15)
             continue
 
         if click_result == "clicked":
-            print(f"[*] 宸插～鍐欓獙璇佺爜骞剁偣鍑荤‘璁ら偖绠? {code}")
+            print(f"[*] 已填写验证码并点击确认邮箱: {code}")
             advanced = wait_for_condition(
                 lambda: has_profile_form() or not otp_form_visible(),
                 timeout=6,
@@ -1741,9 +1741,9 @@ return 'clicked';
             if advanced:
                 refresh_active_page()
                 if has_profile_form():
-                    print("[*] 楠岃瘉鐮佺‘璁ゅ畬鎴愶紝鏈€缁堟敞鍐岄〉宸插氨缁€?)
+                    print("[*] 验证码确认完成，最终注册页已就绪。")
                 else:
-                    print(f"[*] 宸插～鍐欓獙璇佺爜锛岄〉闈㈠凡鑷姩杩涘叆涓嬩竴姝? {page.url}")
+                    print(f"[*] 已填写验证码，页面已自动进入下一步: {page.url}")
                 return code
 
     raise Exception("鏈壘鍒伴獙璇佺爜杈撳叆妗嗘垨纭閭鎸夐挳")
@@ -1867,7 +1867,7 @@ Object.defineProperty(MouseEvent.prototype, 'screenY', { value: screenY });
                 return token
         except (ContextLostError, PageDisconnectedError):
             refresh_active_page()
-            _turnstile_log("context-refresh", started_at, f"attempt={attempt} 鐐瑰嚮鍚庝笂涓嬫枃涓㈠け锛屽凡鍒锋柊娲诲姩椤?)
+            _turnstile_log("context-refresh", started_at, f"attempt={attempt} 点击后上下文丢失，已刷新活动页")
         except Exception as exc:
             last_error = f"{type(exc).__name__}: {exc}"
             _turnstile_log("click-failed", started_at, f"attempt={attempt} {last_error}")
@@ -2027,7 +2027,7 @@ return String(givenInput.value || '').trim() === String(expectedGiven || '').tri
             password,
         )
         if not values_ok:
-            print("[Debug] 鏈€缁堟敞鍐岄〉瀛楁鏍￠獙澶辫触锛岀户缁噸璇曞～鍐欍€?)
+            print("[Debug] 最终注册页字段校验失败，继续重试填写。")
             time.sleep(0.15)
             continue
 
@@ -2043,7 +2043,7 @@ return { state: token ? 'ready' : 'pending', token };
         ) or {"state": "not-found", "token": ""}
 
         if turnstile_state.get("state") == "pending" and not turnstile_token:
-            print("[*] 妫€娴嬪埌鏈€缁堟敞鍐岄〉瀛樺湪 Turnstile锛屽紑濮嬭幏鍙?token銆?)
+            print("[*] 检测到最终注册页存在 Turnstile，开始获取 token。")
             turnstile_token = getTurnstileToken()
 
         if turnstile_token and turnstile_state.get("token") != turnstile_token:
@@ -2067,7 +2067,7 @@ return String(challengeInput.value || '').trim() === String(token || '').trim();
                 turnstile_token,
             )
             if synced:
-                print("[*] Turnstile 鍝嶅簲宸插悓姝ュ埌鏈€缁堟敞鍐岃〃鍗曘€?)
+                print("[*] Turnstile 响应已同步到最终注册表单。")
 
         clicked = wait_for_condition(
             lambda: page.run_js(
@@ -2143,7 +2143,7 @@ def wait_for_sso_cookie(timeout=30):
                     last_seen_names.add(name)
 
                 if name == "sso" and value:
-                    print("[*] 娉ㄥ唽瀹屾垚鍚庡凡鑾峰彇鍒?sso cookie銆?)
+                    print("[*] 注册完成后已获取到 sso cookie。")
                     return value
         except (ContextLostError, PageDisconnectedError):
             refresh_active_page()
@@ -2232,10 +2232,10 @@ def main():
 
     config_count = load_run_count()
 
-    parser = argparse.ArgumentParser(description="xAI 鑷姩娉ㄥ唽骞堕噰闆?sso")
-    parser.add_argument("--count", type=int, default=config_count, help=f"鎵ц杞暟锛? 琛ㄧず鏃犻檺寰幆锛堥粯璁よ鍙?config.json run.count锛屽綋鍓?{config_count}锛?)
-    parser.add_argument("--output", default=DEFAULT_SSO_FILE, help="sso 杈撳嚭 txt 璺緞")
-    parser.add_argument("--extract-numbers", action="store_true", help="娉ㄥ唽瀹屾垚鍚庨澶栨彁鍙栭〉闈㈡暟瀛楁枃鏈?)
+    parser = argparse.ArgumentParser(description="xAI 自动注册并采集 sso")
+    parser.add_argument("--count", type=int, default=config_count, help=f"执行轮数，0 表示无限循环（默认读取 config.json run.count，当前 {config_count}）")
+    parser.add_argument("--output", default=DEFAULT_SSO_FILE, help="sso 输出 txt 路径")
+    parser.add_argument("--extract-numbers", action="store_true", help="注册完成后额外提取页面数字文本")
     args = parser.parse_args()
 
     current_round = 0
@@ -2247,21 +2247,21 @@ def main():
                 break
 
             current_round += 1
-            print(f"\n[*] 寮€濮嬬 {current_round} 杞敞鍐?)
+            print(f"\n[*] 开始第 {current_round} 轮注册")
 
             try:
                 result = run_single_registration(args.output, extract_numbers=args.extract_numbers)
                 success_count += 1
-                print(f"[*] 绗?{current_round} 杞敞鍐屾垚鍔燂紝绔嬪嵆鎺ㄩ€佸綋鍓?token 鍒?API...")
+                print(f"[*] 第 {current_round} 轮注册成功，立即推送当前 token 到 API...")
                 try:
                     push_sso_to_api([result["sso"]])
                 except Exception as push_error:
-                    print(f"[Warn] 褰撳墠 token 绔嬪嵆鎺ㄩ€佸け璐ワ紝浣嗕笉褰卞搷鍚庣画浠诲姟: {push_error}")
+                    print(f"[Warn] 当前 token 立即推送失败，但不影响后续任务: {push_error}")
             except KeyboardInterrupt:
-                print("\n[Info] 鏀跺埌涓柇淇″彿锛屽仠姝㈠悗缁疆娆°€?)
+                print("\n[Info] 收到中断信号，停止后续轮次。")
                 break
             except Exception as error:
-                print(f"[Error] 绗?{current_round} 杞け璐? {error}")
+                print(f"[Error] 第 {current_round} 轮失败: {error}")
             finally:
                 if args.count == 0 or current_round < args.count:
                     stop_browser()
@@ -2270,7 +2270,7 @@ def main():
                 time.sleep(0.2)
     finally:
         if success_count:
-            print(f"\n[*] 娉ㄥ唽缁撴潫锛屾湰娆″叡鎴愬姛 {success_count} 杞紝token 宸叉寜鎴愬姛杞鍗虫椂鎺ㄩ€併€?)
+            print(f"\n[*] 注册结束，本次共成功 {success_count} 轮，token 已按成功轮次即时推送。")
         stop_browser()
 
 
