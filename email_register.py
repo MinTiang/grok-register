@@ -608,3 +608,42 @@ def extract_verification_code(content: str) -> Optional[str]:
             return code
 
     return None
+
+
+def _mail_poll_interval(started_at: float) -> float:
+    elapsed = time.time() - started_at
+    if elapsed < 10:
+        return 0.4
+    if elapsed < 30:
+        return 0.75
+    return 1.0
+
+
+def wait_for_verification_code(mail_token: str, timeout: int = 120) -> Optional[str]:
+    start = time.time()
+    seen_ids = set()
+
+    while time.time() - start < timeout:
+        messages = fetch_emails(mail_token)
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+
+            msg_id = msg.get("id")
+            if not msg_id or msg_id in seen_ids:
+                continue
+            seen_ids.add(msg_id)
+
+            detail = fetch_email_detail(mail_token, str(msg_id))
+            if not detail:
+                continue
+
+            content = _extract_mail_content(detail)
+            code = extract_verification_code(content)
+            if code:
+                print(f"[*] 从 {_provider_label()} 提取到验证码: {code}")
+                return code
+
+        time.sleep(_mail_poll_interval(start))
+
+    return None

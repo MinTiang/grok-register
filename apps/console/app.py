@@ -7,6 +7,7 @@ import shutil
 import signal
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -27,6 +28,11 @@ from pydantic import BaseModel, Field
 
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from sink_client import build_sink_url, extract_sink_tokens, fetch_tokens
+
 RUNTIME_DIR = APP_DIR / "runtime"
 TASKS_DIR = RUNTIME_DIR / "tasks"
 DB_PATH = RUNTIME_DIR / "console.db"
@@ -39,7 +45,7 @@ SOURCE_VENV_PYTHON = Path(
 MAX_CONCURRENT_TASKS = max(1, int(os.getenv("GROK_REGISTER_CONSOLE_MAX_CONCURRENT_TASKS", "1")))
 SUPERVISOR_INTERVAL = max(1.0, float(os.getenv("GROK_REGISTER_CONSOLE_POLL_INTERVAL", "2")))
 
-PROJECT_FILES = ("DrissionPage_example.py", "email_register.py")
+PROJECT_FILES = ("DrissionPage_example.py", "email_register.py", "sink_client.py")
 PROJECT_DIRS = ("turnstilePatch",)
 
 STATUS_QUEUED = "queued"
@@ -198,52 +204,6 @@ def _mask_proxy(proxy_url: str) -> str:
     host = parsed.hostname or ""
     port = f":{parsed.port}" if parsed.port else ""
     return f"{parsed.scheme}://{host}{port}"
-
-
-def _normalize_api_host(api_host: str) -> str:
-    raw = str(api_host or "").strip().rstrip("/")
-    if not raw:
-        return ""
-    parsed = urlparse(raw)
-    if parsed.scheme and parsed.netloc:
-        return f"{parsed.scheme}://{parsed.netloc}"
-    return raw
-
-
-def _build_grok_sink_url(api_host: str, path: str) -> str:
-    host = _normalize_api_host(api_host)
-    if not host:
-        return ""
-    return f"{host}{path if path.startswith('/') else '/' + path}"
-
-
-def _extract_grok_sink_tokens(payload: Any) -> tuple[str, list[str]] | None:
-    if isinstance(payload, list):
-        source = payload
-        kind = "new"
-    elif isinstance(payload, dict) and isinstance(payload.get("tokens"), list):
-        source = payload.get("tokens", [])
-        kind = "new"
-    elif isinstance(payload, dict) and isinstance(payload.get("data"), list):
-        source = payload.get("data", [])
-        kind = "new"
-    elif isinstance(payload, dict) and isinstance(payload.get("items"), list):
-        source = payload.get("items", [])
-        kind = "new"
-    elif isinstance(payload, dict) and isinstance(payload.get("tokens"), dict):
-        source = payload["tokens"].get("ssoBasic", [])
-        kind = "compat"
-    elif isinstance(payload, dict) and isinstance(payload.get("ssoBasic"), list):
-        source = payload.get("ssoBasic", [])
-        kind = "legacy"
-    else:
-        return None
-
-    tokens = [
-        item["token"] if isinstance(item, dict) else str(item)
-        for item in source if item
-    ]
-    return kind, tokens
 
 
 def _request_with_optional_proxy(
@@ -491,6 +451,211 @@ def run_health_checks() -> dict[str, Any]:
     }
 
 
+def run_health_checks() -> dict[str, Any]:
+    defaults = merged_defaults()
+    items: list[dict[str, Any]] = []
+
+    browser_proxy = str(defaults.get("browser_proxy", "") or "").strip()
+    request_proxy = str(defaults.get("proxy", "") or "").strip()
+    api_conf = dict(defaults.get("api") or {})
+    api_host = str(api_conf.get("endpoint", "") or "").strip()
+    api_token = str(api_conf.get("token", "") or "").strip()
+    temp_mail_api_base = str(defaults.get("temp_mail_api_base", "") or "").strip()
+
+    warp_target = browser_proxy or request_proxy
+    if not warp_target:
+        items.append(
+            _build_health_item(
+                "warp",
+                "WARP / Proxy",
+                False,
+                "未配置代理出口",
+                "当前系统默认配置里没有 `browser_proxy` 或 `proxy`，无法检查前置网络出口。",
+                "-",
+            )
+        )
+    else:
+        try:
+            response = _request_with_optional_proxy(
+                "https://www.cloudflare.com/cdn-cgi/trace",
+                proxy_url=warp_target,
+                timeout=20,
+            )
+            body = response.text
+            ip_match = re.search(r"(?m)^ip=(.+)$", body)
+            loc_match = re.search(r"(?m)^loc=(.+)$", body)
+            warp_match = re.search(r"(?m)^warp=(.+)$", body)
+            ip = ip_match.group(1).strip() if ip_match else "unknown"
+            loc = loc_match.group(1).strip() if loc_match else "unknown"
+            warp_state = warp_match.group(1).strip() if warp_match else "unknown"
+            ok = response.status_code == 200
+            items.append(
+                _build_health_item(
+                    "warp",
+                    "WARP / Proxy",
+                    ok,
+                    f"HTTP {response.status_code} | IP {ip} | LOC {loc}",
+                    f"通过代理 `{_mask_proxy(warp_target)}` 访问 Cloudflare trace 成功，warp={warp_state}。",
+                    _mask_proxy(warp_target),
+                )
+            )
+        except Exception as exc:
+            items.append(
+                _build_health_item(
+                    "warp",
+                    "WARP / Proxy",
+                    False,
+                    "代理出口不可达",
+                    f"通过 `{_mask_proxy(warp_target)}` 访问 Cloudflare trace 失败：{exc}",
+                    _mask_proxy(warp_target),
+                )
+            )
+
+    if not api_host:
+        items.append(
+            _build_health_item(
+                "grok2api",
+                "grok2api Sink",
+                False,
+                "未配置 token sink",
+                "当前系统默认配置里没有 `api.endpoint` 主机地址，注册成功后不会自动入池。",
+                "-",
+            )
+        )
+    else:
+        list_url = build_sink_url(api_host, "/admin/api/tokens")
+        try:
+            response = fetch_tokens(api_host, api_token=api_token, timeout=15, verify=False)
+            ok = response.status_code in {200, 401, 403}
+            detail = "接口已可达。即使返回 401/403，也说明服务本身在线，只是需要正确的管理口令。"
+
+            if response.status_code == 200:
+                try:
+                    payload = response.json()
+                except ValueError:
+                    payload = None
+
+                parsed = extract_sink_tokens(payload)
+                if parsed:
+                    version, tokens = parsed
+                    pool_name = str(payload.get("pool", "") or "auto") if isinstance(payload, dict) else "auto"
+                    if version == "new":
+                        detail = f"已识别为新版 grok2api sink，GET `{list_url}` 成功，pool=`{pool_name}`，当前返回 {len(tokens)} 个 token。"
+                    elif version == "compat":
+                        detail = f"已识别为兼容版 grok2api sink，GET `{list_url}` 成功，当前返回 {len(tokens)} 个 ssoBasic token。"
+                    else:
+                        detail = f"已识别为旧版 grok2api sink，GET `{list_url}` 成功，当前返回 {len(tokens)} 个 ssoBasic token。"
+                else:
+                    ok = False
+                    detail = f"接口可达，但 `GET {list_url}` 的返回内容不像当前项目支持的 grok2api token 管理接口。"
+
+            items.append(
+                _build_health_item(
+                    "grok2api",
+                    "grok2api Sink",
+                    ok,
+                    f"HTTP {response.status_code}",
+                    detail,
+                    list_url,
+                )
+            )
+        except Exception as exc:
+            items.append(
+                _build_health_item(
+                    "grok2api",
+                    "grok2api Sink",
+                    False,
+                    "接口不可达",
+                    f"访问 `{list_url}` 失败：{exc}",
+                    list_url,
+                )
+            )
+
+    if not temp_mail_api_base:
+        items.append(
+            _build_health_item(
+                "temp_mail",
+                "Temp Mail API",
+                False,
+                "未配置临时邮箱 API",
+                "当前系统默认配置里没有 `temp_mail_api_base`，注册流程会在创建邮箱阶段直接失败。",
+                "-",
+            )
+        )
+    else:
+        try:
+            response = _request_with_optional_proxy(
+                temp_mail_api_base,
+                proxy_url=request_proxy,
+                timeout=15,
+            )
+            ok = response.status_code < 500
+            items.append(
+                _build_health_item(
+                    "temp_mail",
+                    "Temp Mail API",
+                    ok,
+                    f"HTTP {response.status_code}",
+                    "接口地址可达。这里仅做基础连通性检查，不会真的创建邮箱地址。",
+                    temp_mail_api_base,
+                )
+            )
+        except Exception as exc:
+            items.append(
+                _build_health_item(
+                    "temp_mail",
+                    "Temp Mail API",
+                    False,
+                    "接口不可达",
+                    f"访问 `{temp_mail_api_base}` 失败：{exc}",
+                    temp_mail_api_base,
+                )
+            )
+
+    xai_proxy = browser_proxy or request_proxy
+    try:
+        response = _request_with_optional_proxy(
+            "https://accounts.x.ai/sign-up?redirect=grok-com",
+            proxy_url=xai_proxy,
+            timeout=20,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        ok = response.status_code in {200, 301, 302, 303, 307, 308}
+        detail = (
+            f"使用 `{_mask_proxy(xai_proxy)}` 访问注册页返回 HTTP {response.status_code}。"
+            if xai_proxy
+            else f"直连访问注册页返回 HTTP {response.status_code}。"
+        )
+        if not ok and response.status_code in {401, 403, 429}:
+            detail += " 这通常说明当前出口被目标站点拦截、限流，或者还没有完成可用的人机验证链路。"
+        items.append(
+            _build_health_item(
+                "xai",
+                "x.ai Sign-up",
+                ok,
+                f"HTTP {response.status_code}",
+                detail,
+                "https://accounts.x.ai/sign-up?redirect=grok-com",
+            )
+        )
+    except Exception as exc:
+        items.append(
+            _build_health_item(
+                "xai",
+                "x.ai Sign-up",
+                False,
+                "注册页不可达",
+                f"访问 `x.ai` 注册页失败：{exc}",
+                "https://accounts.x.ai/sign-up?redirect=grok-com",
+            )
+        )
+
+    return {
+        "items": items,
+        "checked_at": now_iso(),
+    }
+
+
 class TaskCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     count: int = Field(50, ge=1, le=5000)
@@ -676,6 +841,73 @@ def parse_console_state(console_path: Path) -> dict[str, Any]:
         if "最终注册页" in line:
             state["current_phase"] = "profile_page"
         if "Turnstile 响应已同步" in line:
+            state["current_phase"] = "turnstile_solved"
+        if "已填写注册资料并点击完成注册" in line:
+            state["current_phase"] = "submitting_profile"
+        if LINE_RE_PUSH.search(line):
+            state["current_phase"] = "pushed_to_api"
+        if any(token in line for token in interesting):
+            state["last_log_at"] = now_iso()
+    return state
+
+
+def parse_console_state(console_path: Path) -> dict[str, Any]:
+    state = {
+        "completed_count": 0,
+        "failed_count": 0,
+        "current_round": 0,
+        "current_phase": "",
+        "last_email": "",
+        "last_error": "",
+        "last_log_at": now_iso(),
+    }
+    if not console_path.exists():
+        return state
+
+    lines = console_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if not lines:
+        return state
+
+    interesting = (
+        "开始第",
+        "临时邮箱创建成功",
+        "已填写邮箱并点击注册",
+        "提取到验证码",
+        "已填写验证码",
+        "最终注册页",
+        "Turnstile",
+        "已填写注册资料并点击完成注册",
+        "注册成功",
+        "[Error]",
+        "已推送到 API",
+    )
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if m := LINE_RE_ROUND.search(line):
+            state["current_round"] = int(m.group(1))
+            state["current_phase"] = "starting_round"
+        if m := LINE_RE_SUCCESS.search(line):
+            state["completed_count"] += 1
+            state["last_email"] = m.group(1)
+            state["current_phase"] = "success"
+        if m := LINE_RE_ERROR.search(line):
+            state["failed_count"] += 1
+            state["last_error"] = m.group(2).strip()
+            state["current_phase"] = "error"
+        if m := LINE_RE_TEMP_EMAIL.search(line):
+            state["last_email"] = m.group(1)
+            state["current_phase"] = "mailbox_created"
+        if m := LINE_RE_FILLED_EMAIL.search(line):
+            state["last_email"] = m.group(1)
+            state["current_phase"] = "email_submitted"
+        if "提取到验证码" in line:
+            state["current_phase"] = "otp_received"
+        if "最终注册页" in line:
+            state["current_phase"] = "profile_page"
+        if "Turnstile 响应已同步到最终注册表单" in line:
             state["current_phase"] = "turnstile_solved"
         if "已填写注册资料并点击完成注册" in line:
             state["current_phase"] = "submitting_profile"

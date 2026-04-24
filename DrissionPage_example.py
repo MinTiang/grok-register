@@ -1,6 +1,7 @@
 from DrissionPage import Chromium, ChromiumOptions
 from DrissionPage.errors import ContextLostError, PageDisconnectedError
 import argparse
+import json
 import shutil
 import tempfile
 import datetime
@@ -9,8 +10,10 @@ import time
 import os
 import secrets
 import sys
+from typing import Any, Callable
 
 from email_register import get_email_and_token, get_oai_code
+from sink_client import push_tokens
 
 
 def setup_run_logger() -> logging.Logger:
@@ -1270,6 +1273,1003 @@ def main():
             if args.count == 0 or current_round < args.count:
                 time.sleep(0.5)
 
+    finally:
+        if success_count:
+            print(f"\n[*] 注册结束，本次共成功 {success_count} 轮，token 已按成功轮次即时推送。")
+        stop_browser()
+
+
+def setup_run_logger() -> logging.Logger:
+    log_dir = os.path.join(os.path.dirname(__file__), "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = os.path.join(log_dir, f"run_{ts}.log")
+
+    logger = logging.getLogger("grok_register")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+
+    fmt = logging.Formatter("%(asctime)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    fh = logging.FileHandler(log_path, encoding="utf-8")
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+    sh = logging.StreamHandler(sys.stdout)
+    sh.setFormatter(fmt)
+    logger.addHandler(sh)
+
+    logger.info("日志文件: %s", log_path)
+    return logger
+
+
+def wait_for_condition(
+    predicate: Callable[[], Any],
+    timeout: float,
+    interval: float = 0.15,
+    recover: Callable[[], Any] | None = None,
+) -> Any | None:
+    deadline = time.perf_counter() + timeout
+    while time.perf_counter() < deadline:
+        try:
+            result = predicate()
+            if result:
+                return result
+        except (ContextLostError, PageDisconnectedError):
+            if recover:
+                recover()
+        except Exception:
+            pass
+        time.sleep(interval)
+    return None
+
+
+def otp_form_visible() -> bool:
+    refresh_active_page()
+    try:
+        return bool(
+            page.run_js(
+                """
+function isVisible(node) {
+    if (!node) {
+        return false;
+    }
+    const style = window.getComputedStyle(node);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+        return false;
+    }
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+}
+
+const aggregateInput = Array.from(document.querySelectorAll('input[data-input-otp="true"], input[name="code"], input[autocomplete="one-time-code"], input[inputmode="numeric"], input[inputmode="text"]')).find((node) => {
+    return isVisible(node) && !node.disabled && !node.readOnly && Number(node.maxLength || 0) > 1;
+}) || null;
+
+const otpBoxes = Array.from(document.querySelectorAll('input')).filter((node) => {
+    if (!isVisible(node) || node.disabled || node.readOnly) {
+        return false;
+    }
+    const maxLength = Number(node.maxLength || 0);
+    const autocomplete = String(node.autocomplete || '').toLowerCase();
+    return maxLength === 1 || autocomplete === 'one-time-code';
+});
+
+return !!(aggregateInput || otpBoxes.length);
+                """
+            )
+        )
+    except Exception:
+        return False
+
+
+def read_turnstile_token() -> str:
+    refresh_active_page()
+    try:
+        token = page.run_js(
+            """
+try {
+    const input = document.querySelector('input[name="cf-turnstile-response"]');
+    const direct = input ? String(input.value || '').trim() : '';
+    if (direct) {
+        return direct;
+    }
+    if (typeof turnstile !== 'undefined' && turnstile && typeof turnstile.getResponse === 'function') {
+        return String(turnstile.getResponse() || '').trim();
+    }
+} catch (e) {}
+return '';
+            """
+        )
+        return str(token or "").strip()
+    except Exception:
+        return ""
+
+
+def _turnstile_poll_interval(started_at: float) -> float:
+    elapsed = time.perf_counter() - started_at
+    if elapsed < 2:
+        return 0.15
+    if elapsed < 6:
+        return 0.25
+    if elapsed < 12:
+        return 0.4
+    return 0.6
+
+
+def _turnstile_log(stage: str, started_at: float, detail: str = "") -> None:
+    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+    message = f"[Turnstile][{elapsed_ms:>5}ms] {stage}"
+    if detail:
+        message = f"{message} | {detail}"
+    print(message)
+
+
+def fill_email_and_submit(timeout=15):
+    email, dev_token = get_email_and_token()
+    if not email or not dev_token:
+        raise Exception("获取邮箱失败")
+
+    deadline = time.perf_counter() + timeout
+    while time.perf_counter() < deadline:
+        try:
+            filled = page.run_js(
+                """
+const email = arguments[0];
+
+function isVisible(node) {
+    if (!node) {
+        return false;
+    }
+    const style = window.getComputedStyle(node);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+        return false;
+    }
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+}
+
+const input = Array.from(document.querySelectorAll('input[data-testid="email"], input[name="email"], input[type="email"], input[autocomplete="email"]')).find((node) => {
+    return isVisible(node) && !node.disabled && !node.readOnly;
+}) || null;
+
+if (!input) {
+    return 'not-ready';
+}
+
+input.focus();
+input.click();
+
+const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+const tracker = input._valueTracker;
+if (tracker) {
+    tracker.setValue('');
+}
+if (valueSetter) {
+    valueSetter.call(input, email);
+} else {
+    input.value = email;
+}
+
+input.dispatchEvent(new InputEvent('beforeinput', {
+    bubbles: true,
+    data: email,
+    inputType: 'insertText',
+}));
+input.dispatchEvent(new InputEvent('input', {
+    bubbles: true,
+    data: email,
+    inputType: 'insertText',
+}));
+input.dispatchEvent(new Event('change', { bubbles: true }));
+
+if ((input.value || '').trim() !== email || !input.checkValidity()) {
+    return 'fill-failed';
+}
+
+input.blur();
+return 'filled';
+                """,
+                email,
+            )
+        except (ContextLostError, PageDisconnectedError):
+            refresh_active_page()
+            continue
+
+        if filled == "not-ready":
+            time.sleep(0.15)
+            continue
+
+        if filled != "filled":
+            print(f"[Debug] 邮箱输入框已出现，但写入失败: {filled}")
+            time.sleep(0.15)
+            continue
+
+        clicked = wait_for_condition(
+            lambda: page.run_js(
+                r"""
+function isVisible(node) {
+    if (!node) {
+        return false;
+    }
+    const style = window.getComputedStyle(node);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+        return false;
+    }
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+}
+
+const input = Array.from(document.querySelectorAll('input[data-testid="email"], input[name="email"], input[type="email"], input[autocomplete="email"]')).find((node) => {
+    return isVisible(node) && !node.disabled && !node.readOnly;
+}) || null;
+
+if (!input || !input.checkValidity() || !(input.value || '').trim()) {
+    return false;
+}
+
+const buttons = Array.from(document.querySelectorAll('button[type="submit"], button')).filter((node) => {
+    return isVisible(node) && !node.disabled && node.getAttribute('aria-disabled') !== 'true';
+});
+const submitButton = buttons.find((node) => {
+    const text = (node.innerText || node.textContent || '').replace(/\s+/g, '').toLowerCase();
+    return text === '注册' || text.includes('注册') || text === 'signup' || text === 'sign up' || text.includes('sign up');
+});
+
+if (!submitButton) {
+    return false;
+}
+
+submitButton.focus();
+submitButton.click();
+return true;
+                """
+            ),
+            timeout=3.5,
+            interval=0.1,
+            recover=refresh_active_page,
+        )
+        if clicked:
+            print(f"[*] 已填写邮箱并点击注册: {email}")
+            return email, dev_token
+
+    raise Exception("未找到邮箱输入框或注册按钮")
+
+
+def fill_code_and_submit(email, dev_token, timeout=60):
+    code = get_oai_code(dev_token, email)
+    if not code:
+        raise Exception("获取验证码失败")
+
+    deadline = time.perf_counter() + timeout
+    while time.perf_counter() < deadline:
+        try:
+            filled = page.run_js(
+                """
+const code = String(arguments[0] || '').trim();
+
+function isVisible(node) {
+    if (!node) {
+        return false;
+    }
+    const style = window.getComputedStyle(node);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+        return false;
+    }
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+}
+
+function setNativeValue(input, value) {
+    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+    const tracker = input._valueTracker;
+    if (tracker) {
+        tracker.setValue('');
+    }
+    if (nativeSetter) {
+        nativeSetter.call(input, '');
+        nativeSetter.call(input, value);
+    } else {
+        input.value = '';
+        input.value = value;
+    }
+}
+
+function dispatchInputEvents(input, value) {
+    input.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true,
+        cancelable: true,
+        data: value,
+        inputType: 'insertText',
+    }));
+    input.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        cancelable: true,
+        data: value,
+        inputType: 'insertText',
+    }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+const input = Array.from(document.querySelectorAll('input[data-input-otp="true"], input[name="code"], input[autocomplete="one-time-code"], input[inputmode="numeric"], input[inputmode="text"]')).find((node) => {
+    return isVisible(node) && !node.disabled && !node.readOnly && Number(node.maxLength || code.length || 6) > 1;
+}) || null;
+
+const otpBoxes = Array.from(document.querySelectorAll('input')).filter((node) => {
+    if (!isVisible(node) || node.disabled || node.readOnly) {
+        return false;
+    }
+    const maxLength = Number(node.maxLength || 0);
+    const autocomplete = String(node.autocomplete || '').toLowerCase();
+    return maxLength === 1 || autocomplete === 'one-time-code';
+});
+
+if (input) {
+    input.focus();
+    input.click();
+    setNativeValue(input, code);
+    dispatchInputEvents(input, code);
+    input.blur();
+    return String(input.value || '').trim() === code ? 'filled' : 'aggregate-mismatch';
+}
+
+if (!otpBoxes.length) {
+    return 'not-ready';
+}
+
+const orderedBoxes = otpBoxes.slice(0, code.length);
+for (let i = 0; i < orderedBoxes.length; i += 1) {
+    const box = orderedBoxes[i];
+    const char = code[i] || '';
+    box.focus();
+    box.click();
+    setNativeValue(box, char);
+    dispatchInputEvents(box, char);
+    box.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: char }));
+    box.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: char }));
+    box.blur();
+}
+
+const merged = orderedBoxes.map((node) => String(node.value || '').trim()).join('');
+return merged === code ? 'filled' : 'box-mismatch';
+                """,
+                code,
+            )
+        except (ContextLostError, PageDisconnectedError):
+            refresh_active_page()
+            if has_profile_form():
+                print("[*] 验证码提交后已跳转到最终注册页。")
+                return code
+            continue
+
+        if filled == "not-ready":
+            if has_profile_form():
+                print("[*] 已直接进入最终注册页，跳过验证码确认。")
+                return code
+            time.sleep(0.15)
+            continue
+
+        if filled != "filled":
+            print(f"[Debug] 验证码输入框已出现，但写入失败: {filled}")
+            time.sleep(0.15)
+            continue
+
+        click_result = wait_for_condition(
+            lambda: page.run_js(
+                r"""
+function isVisible(node) {
+    if (!node) {
+        return false;
+    }
+    const style = window.getComputedStyle(node);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+        return false;
+    }
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+}
+
+const aggregateInput = Array.from(document.querySelectorAll('input[data-input-otp="true"], input[name="code"], input[autocomplete="one-time-code"], input[inputmode="numeric"], input[inputmode="text"]')).find((node) => {
+    return isVisible(node) && !node.disabled && !node.readOnly && Number(node.maxLength || 0) > 1;
+}) || null;
+
+let value = '';
+if (aggregateInput) {
+    value = String(aggregateInput.value || '').trim();
+    const expectedLength = Number(aggregateInput.maxLength || value.length || 6);
+    if (!value || (expectedLength > 0 && value.length !== expectedLength)) {
+        return false;
+    }
+} else {
+    const otpBoxes = Array.from(document.querySelectorAll('input')).filter((node) => {
+        if (!isVisible(node) || node.disabled || node.readOnly) {
+            return false;
+        }
+        const maxLength = Number(node.maxLength || 0);
+        const autocomplete = String(node.autocomplete || '').toLowerCase();
+        return maxLength === 1 || autocomplete === 'one-time-code';
+    });
+    value = otpBoxes.map((node) => String(node.value || '').trim()).join('');
+    if (!value || value.length < 6) {
+        return false;
+    }
+}
+
+const buttons = Array.from(document.querySelectorAll('button[type="submit"], button')).filter((node) => {
+    return isVisible(node) && !node.disabled && node.getAttribute('aria-disabled') !== 'true';
+});
+const confirmButton = buttons.find((node) => {
+    const text = (node.innerText || node.textContent || '').replace(/\s+/g, '').toLowerCase();
+    return text === '确认邮箱'
+        || text.includes('确认邮箱')
+        || text === '继续'
+        || text.includes('继续')
+        || text === '下一步'
+        || text.includes('下一步')
+        || text.includes('confirm')
+        || text.includes('continue')
+        || text.includes('next')
+        || text.includes('verify');
+});
+
+if (!confirmButton) {
+    return 'no-button';
+}
+
+confirmButton.focus();
+confirmButton.click();
+return 'clicked';
+                """
+            ),
+            timeout=4,
+            interval=0.1,
+            recover=refresh_active_page,
+        )
+
+        if click_result == "no-button":
+            refresh_active_page()
+            if has_profile_form() or not otp_form_visible():
+                print(f"[*] 已填写验证码，页面已自动进入下一步: {page.url}")
+                return code
+            time.sleep(0.15)
+            continue
+
+        if click_result == "clicked":
+            print(f"[*] 已填写验证码并点击确认邮箱: {code}")
+            advanced = wait_for_condition(
+                lambda: has_profile_form() or not otp_form_visible(),
+                timeout=6,
+                interval=0.15,
+                recover=refresh_active_page,
+            )
+            if advanced:
+                refresh_active_page()
+                if has_profile_form():
+                    print("[*] 验证码确认完成，最终注册页已就绪。")
+                else:
+                    print(f"[*] 已填写验证码，页面已自动进入下一步: {page.url}")
+                return code
+
+    raise Exception("未找到验证码输入框或确认邮箱按钮")
+
+
+def getTurnstileToken(timeout: float = 20.0):
+    started_at = time.perf_counter()
+    deadline = started_at + timeout
+    last_error = ""
+    last_click_at = 0.0
+    click_count = 0
+    attempt = 0
+
+    _turnstile_log("start", started_at, "开始获取 Turnstile token")
+    try:
+        page.run_js("try { turnstile.reset() } catch (e) {}")
+        _turnstile_log("reset", started_at, "已调用 turnstile.reset()")
+    except Exception as exc:
+        _turnstile_log("reset-skip", started_at, f"{type(exc).__name__}: {exc}")
+
+    while time.perf_counter() < deadline:
+        attempt += 1
+
+        token = read_turnstile_token()
+        if token:
+            _turnstile_log("token-ready", started_at, f"attempt={attempt} len={len(token)}")
+            return token
+
+        probe_started_at = time.perf_counter()
+        try:
+            probe = page.run_js(
+                """
+const input = document.querySelector('input[name="cf-turnstile-response"]');
+const inputValue = input ? String(input.value || '').trim() : '';
+const iframeCount = document.querySelectorAll('iframe').length;
+const widgetCount = document.querySelectorAll('[name="cf-turnstile-response"], iframe[src*="turnstile"], iframe[title*="Widget"]').length;
+return {
+    hasInput: !!input,
+    inputReady: !!inputValue,
+    iframeCount,
+    widgetCount,
+};
+                """
+            ) or {}
+            probe_cost_ms = int((time.perf_counter() - probe_started_at) * 1000)
+            _turnstile_log("probe", started_at, f"attempt={attempt} cost={probe_cost_ms}ms state={probe}")
+        except (ContextLostError, PageDisconnectedError):
+            refresh_active_page()
+            _turnstile_log("context-refresh", started_at, f"attempt={attempt} 页面上下文丢失，已刷新活动页")
+            time.sleep(0.15)
+            continue
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            _turnstile_log("probe-failed", started_at, f"attempt={attempt} {last_error}")
+
+        now = time.perf_counter()
+        if now - last_click_at < 0.9:
+            time.sleep(_turnstile_poll_interval(started_at))
+            continue
+
+        try:
+            locate_started_at = time.perf_counter()
+            challenge_solution = page.ele("@name=cf-turnstile-response")
+            challenge_wrapper = challenge_solution.parent() if challenge_solution else None
+            challenge_iframe = None
+            if challenge_wrapper and challenge_wrapper.shadow_root:
+                challenge_iframe = challenge_wrapper.shadow_root.ele("tag:iframe")
+            locate_cost_ms = int((time.perf_counter() - locate_started_at) * 1000)
+            _turnstile_log(
+                "locate",
+                started_at,
+                f"attempt={attempt} cost={locate_cost_ms}ms iframe={'yes' if challenge_iframe else 'no'}",
+            )
+
+            if not challenge_iframe:
+                time.sleep(_turnstile_poll_interval(started_at))
+                continue
+
+            patch_started_at = time.perf_counter()
+            challenge_iframe.run_js(
+                """
+window.dtp = 1;
+function getRandomInt(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+const screenX = getRandomInt(800, 1200);
+const screenY = getRandomInt(400, 600);
+Object.defineProperty(MouseEvent.prototype, 'screenX', { value: screenX });
+Object.defineProperty(MouseEvent.prototype, 'screenY', { value: screenY });
+                """
+            )
+            patch_cost_ms = int((time.perf_counter() - patch_started_at) * 1000)
+            _turnstile_log("patch", started_at, f"attempt={attempt} cost={patch_cost_ms}ms")
+
+            click_started_at = time.perf_counter()
+            challenge_body = challenge_iframe.ele("tag:body").shadow_root
+            challenge_button = challenge_body.ele("tag:input") if challenge_body else None
+            if not challenge_button:
+                _turnstile_log("button-missing", started_at, f"attempt={attempt}")
+                time.sleep(_turnstile_poll_interval(started_at))
+                continue
+
+            challenge_button.click()
+            click_count += 1
+            last_click_at = time.perf_counter()
+            click_cost_ms = int((time.perf_counter() - click_started_at) * 1000)
+            _turnstile_log(
+                "click",
+                started_at,
+                f"attempt={attempt} click_count={click_count} cost={click_cost_ms}ms",
+            )
+
+            token = wait_for_condition(
+                read_turnstile_token,
+                timeout=1.8,
+                interval=0.12,
+                recover=refresh_active_page,
+            )
+            if token:
+                _turnstile_log("token-after-click", started_at, f"attempt={attempt} len={len(token)}")
+                return token
+        except (ContextLostError, PageDisconnectedError):
+            refresh_active_page()
+            _turnstile_log("context-refresh", started_at, f"attempt={attempt} 点击后上下文丢失，已刷新活动页")
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            _turnstile_log("click-failed", started_at, f"attempt={attempt} {last_error}")
+
+        time.sleep(_turnstile_poll_interval(started_at))
+
+    raise Exception(f"Turnstile 处理超时（{timeout:.1f}s），最后错误: {last_error or 'none'}")
+
+
+def fill_profile_and_submit(timeout=30):
+    given_name, family_name, password = build_profile()
+    deadline = time.perf_counter() + timeout
+    turnstile_token = ""
+
+    while time.perf_counter() < deadline:
+        try:
+            filled = page.run_js(
+                """
+const givenName = arguments[0];
+const familyName = arguments[1];
+const password = arguments[2];
+
+function isVisible(node) {
+    if (!node) {
+        return false;
+    }
+    const style = window.getComputedStyle(node);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+        return false;
+    }
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+}
+
+function pickInput(selector) {
+    return Array.from(document.querySelectorAll(selector)).find((node) => {
+        return isVisible(node) && !node.disabled && !node.readOnly;
+    }) || null;
+}
+
+function setInputValue(input, value) {
+    if (!input) {
+        return false;
+    }
+    input.focus();
+    input.click();
+
+    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+    const tracker = input._valueTracker;
+    if (tracker) {
+        tracker.setValue('');
+    }
+
+    if (nativeSetter) {
+        nativeSetter.call(input, '');
+        nativeSetter.call(input, value);
+    } else {
+        input.value = '';
+        input.value = value;
+    }
+
+    input.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true,
+        cancelable: true,
+        data: value,
+        inputType: 'insertText',
+    }));
+    input.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        cancelable: true,
+        data: value,
+        inputType: 'insertText',
+    }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    input.dispatchEvent(new Event('blur', { bubbles: true }));
+
+    return String(input.value || '') === String(value || '');
+}
+
+const givenInput = pickInput('input[data-testid="givenName"], input[name="givenName"], input[autocomplete="given-name"]');
+const familyInput = pickInput('input[data-testid="familyName"], input[name="familyName"], input[autocomplete="family-name"]');
+const passwordInput = pickInput('input[data-testid="password"], input[name="password"], input[type="password"]');
+
+if (!givenInput || !familyInput || !passwordInput) {
+    return 'not-ready';
+}
+
+const givenOk = setInputValue(givenInput, givenName);
+const familyOk = setInputValue(familyInput, familyName);
+const passwordOk = setInputValue(passwordInput, password);
+
+if (!givenOk || !familyOk || !passwordOk) {
+    return 'fill-failed';
+}
+
+return [
+    String(givenInput.value || '').trim() === String(givenName || '').trim(),
+    String(familyInput.value || '').trim() === String(familyName || '').trim(),
+    String(passwordInput.value || '') === String(password || ''),
+].every(Boolean) ? 'filled' : 'verify-failed';
+                """,
+                given_name,
+                family_name,
+                password,
+            )
+        except (ContextLostError, PageDisconnectedError):
+            refresh_active_page()
+            continue
+
+        if filled == "not-ready":
+            time.sleep(0.15)
+            continue
+
+        if filled != "filled":
+            print(f"[Debug] 最终注册页输入框已出现，但姓名/密码写入失败: {filled}")
+            time.sleep(0.15)
+            continue
+
+        values_ok = page.run_js(
+            """
+const expectedGiven = arguments[0];
+const expectedFamily = arguments[1];
+const expectedPassword = arguments[2];
+
+function isVisible(node) {
+    if (!node) {
+        return false;
+    }
+    const style = window.getComputedStyle(node);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+        return false;
+    }
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+}
+
+function pickInput(selector) {
+    return Array.from(document.querySelectorAll(selector)).find((node) => {
+        return isVisible(node) && !node.disabled && !node.readOnly;
+    }) || null;
+}
+
+const givenInput = pickInput('input[data-testid="givenName"], input[name="givenName"], input[autocomplete="given-name"]');
+const familyInput = pickInput('input[data-testid="familyName"], input[name="familyName"], input[autocomplete="family-name"]');
+const passwordInput = pickInput('input[data-testid="password"], input[name="password"], input[type="password"]');
+
+if (!givenInput || !familyInput || !passwordInput) {
+    return false;
+}
+
+return String(givenInput.value || '').trim() === String(expectedGiven || '').trim()
+    && String(familyInput.value || '').trim() === String(expectedFamily || '').trim()
+    && String(passwordInput.value || '') === String(expectedPassword || '');
+            """,
+            given_name,
+            family_name,
+            password,
+        )
+        if not values_ok:
+            print("[Debug] 最终注册页字段校验失败，继续重试填写。")
+            time.sleep(0.15)
+            continue
+
+        turnstile_state = page.run_js(
+            """
+const challengeInput = document.querySelector('input[name="cf-turnstile-response"]');
+if (!challengeInput) {
+    return { state: 'not-found', token: '' };
+}
+const token = String(challengeInput.value || '').trim();
+return { state: token ? 'ready' : 'pending', token };
+            """
+        ) or {"state": "not-found", "token": ""}
+
+        if turnstile_state.get("state") == "pending" and not turnstile_token:
+            print("[*] 检测到最终注册页存在 Turnstile，开始获取 token。")
+            turnstile_token = getTurnstileToken()
+
+        if turnstile_token and turnstile_state.get("token") != turnstile_token:
+            synced = page.run_js(
+                """
+const token = arguments[0];
+const challengeInput = document.querySelector('input[name="cf-turnstile-response"]');
+if (!challengeInput) {
+    return false;
+}
+const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+if (nativeSetter) {
+    nativeSetter.call(challengeInput, token);
+} else {
+    challengeInput.value = token;
+}
+challengeInput.dispatchEvent(new Event('input', { bubbles: true }));
+challengeInput.dispatchEvent(new Event('change', { bubbles: true }));
+return String(challengeInput.value || '').trim() === String(token || '').trim();
+                """,
+                turnstile_token,
+            )
+            if synced:
+                print("[*] Turnstile 响应已同步到最终注册表单。")
+
+        clicked = wait_for_condition(
+            lambda: page.run_js(
+                r"""
+const challengeInput = document.querySelector('input[name="cf-turnstile-response"]');
+if (challengeInput && !String(challengeInput.value || '').trim()) {
+    return false;
+}
+
+function isVisible(node) {
+    if (!node) {
+        return false;
+    }
+    const style = window.getComputedStyle(node);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+        return false;
+    }
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+}
+
+const buttons = Array.from(document.querySelectorAll('button[type="submit"], button')).filter((node) => {
+    return isVisible(node) && !node.disabled && node.getAttribute('aria-disabled') !== 'true';
+});
+const submitButton = buttons.find((node) => {
+    const text = (node.innerText || node.textContent || '').replace(/\s+/g, '').toLowerCase();
+    return text === '完成注册' || text.includes('完成注册') || text.includes('create account') || text.includes('sign up') || text.includes('complete');
+});
+
+if (!submitButton) {
+    return false;
+}
+
+submitButton.focus();
+submitButton.click();
+return true;
+                """
+            ),
+            timeout=4.5,
+            interval=0.1,
+            recover=refresh_active_page,
+        )
+        if clicked:
+            print(f"[*] 已填写注册资料并点击完成注册: {given_name} {family_name} / {password}")
+            return {
+                "given_name": given_name,
+                "family_name": family_name,
+                "password": password,
+            }
+
+    raise Exception("未找到最终注册表单或完成注册按钮")
+
+
+def wait_for_sso_cookie(timeout=30):
+    deadline = time.perf_counter() + timeout
+    last_seen_names = set()
+
+    while time.perf_counter() < deadline:
+        try:
+            if page is None:
+                refresh_active_page()
+
+            cookies = page.cookies(all_domains=True, all_info=True) or []
+            for item in cookies:
+                if isinstance(item, dict):
+                    name = str(item.get("name", "")).strip()
+                    value = str(item.get("value", "")).strip()
+                else:
+                    name = str(getattr(item, "name", "")).strip()
+                    value = str(getattr(item, "value", "")).strip()
+
+                if name:
+                    last_seen_names.add(name)
+
+                if name == "sso" and value:
+                    print("[*] 注册完成后已获取到 sso cookie。")
+                    return value
+        except (ContextLostError, PageDisconnectedError):
+            refresh_active_page()
+        except Exception:
+            refresh_active_page()
+
+        time.sleep(0.2)
+
+    raise Exception(f"注册完成后未获取到 sso cookie，当前已见 cookie: {sorted(last_seen_names)}")
+
+
+def append_sso_to_txt(sso_value, output_path=DEFAULT_SSO_FILE):
+    normalized = str(sso_value or "").strip()
+    if not normalized:
+        raise Exception("待写入的 sso 为空")
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, "a", encoding="utf-8") as file:
+        file.write(normalized + "\n")
+
+    print(f"[*] 已追加写入 sso 到文件: {output_path}")
+
+
+def push_sso_to_api(new_tokens: list):
+    config_path = os.path.join(os.path.dirname(__file__), "config.json")
+    try:
+        with open(config_path, "r", encoding="utf-8") as file:
+            conf = json.load(file)
+    except Exception as exc:
+        print(f"[Warn] 读取 config.json 失败，跳过推送: {exc}")
+        return
+
+    api_conf = conf.get("api", {}) or {}
+    api_host = str(api_conf.get("endpoint", "") or "").strip()
+    api_token = str(api_conf.get("token", "") or "").strip()
+    if not api_host or not api_token:
+        return
+
+    ok, message = push_tokens(
+        api_host=api_host,
+        api_token=api_token,
+        tokens=new_tokens,
+        timeout=60,
+        verify=False,
+    )
+    if ok:
+        if message != "No tokens to push.":
+            print(f"[*] {message}")
+    else:
+        print(f"[Warn] {message}")
+
+
+def run_single_registration(output_path=DEFAULT_SSO_FILE, extract_numbers=False):
+    open_signup_page()
+    email, dev_token = fill_email_and_submit()
+    fill_code_and_submit(email, dev_token)
+    profile = fill_profile_and_submit()
+    sso_value = wait_for_sso_cookie()
+    append_sso_to_txt(sso_value, output_path)
+
+    if extract_numbers:
+        extract_visible_numbers()
+
+    result = {
+        "email": email,
+        "sso": sso_value,
+        **profile,
+    }
+
+    if run_logger:
+        run_logger.info(
+            "注册成功 | email=%s | password=%s | given=%s | family=%s",
+            email,
+            profile.get("password", ""),
+            profile.get("given_name", ""),
+            profile.get("family_name", ""),
+        )
+
+    print(f"[*] 本轮注册完成，邮箱: {email}")
+    return result
+
+
+def main():
+    global run_logger
+    run_logger = setup_run_logger()
+
+    config_count = load_run_count()
+
+    parser = argparse.ArgumentParser(description="xAI 自动注册并采集 sso")
+    parser.add_argument("--count", type=int, default=config_count, help=f"执行轮数，0 表示无限循环（默认读取 config.json run.count，当前 {config_count}）")
+    parser.add_argument("--output", default=DEFAULT_SSO_FILE, help="sso 输出 txt 路径")
+    parser.add_argument("--extract-numbers", action="store_true", help="注册完成后额外提取页面数字文本")
+    args = parser.parse_args()
+
+    current_round = 0
+    success_count = 0
+    try:
+        start_browser()
+        while True:
+            if args.count > 0 and current_round >= args.count:
+                break
+
+            current_round += 1
+            print(f"\n[*] 开始第 {current_round} 轮注册")
+
+            try:
+                result = run_single_registration(args.output, extract_numbers=args.extract_numbers)
+                success_count += 1
+                print(f"[*] 第 {current_round} 轮注册成功，立即推送当前 token 到 API...")
+                try:
+                    push_sso_to_api([result["sso"]])
+                except Exception as push_error:
+                    print(f"[Warn] 当前 token 立即推送失败，但不影响后续任务: {push_error}")
+            except KeyboardInterrupt:
+                print("\n[Info] 收到中断信号，停止后续轮次。")
+                break
+            except Exception as error:
+                print(f"[Error] 第 {current_round} 轮失败: {error}")
+            finally:
+                if args.count == 0 or current_round < args.count:
+                    stop_browser()
+
+            if args.count == 0 or current_round < args.count:
+                time.sleep(0.2)
     finally:
         if success_count:
             print(f"\n[*] 注册结束，本次共成功 {success_count} 轮，token 已按成功轮次即时推送。")
