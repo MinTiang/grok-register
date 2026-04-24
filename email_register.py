@@ -480,7 +480,7 @@ def wait_for_verification_code(mail_token: str, timeout: int = 120) -> Optional[
             if code:
                 print(f"[*] 从 {_provider_label()} 提取到验证码: {code}")
                 return code
-        time.sleep(3)
+        time.sleep(1)
     return None
 
 

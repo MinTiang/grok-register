@@ -341,16 +341,16 @@ return 'filled';
         )
 
         if filled == 'not-ready':
-            time.sleep(0.5)
+            time.sleep(0.25)
             continue
 
         if filled != 'filled':
             print(f"[Debug] 邮箱输入框已出现，但写入失败: {filled}")
-            time.sleep(0.5)
+            time.sleep(0.25)
             continue
 
         if filled == 'filled':
-            time.sleep(0.8)
+            time.sleep(0.35)
             clicked = page.run_js(
                 r"""
 function isVisible(node) {
@@ -507,22 +507,22 @@ return merged === code ? 'filled' : 'box-mismatch';
             if has_profile_form():
                 print("[*] 验证码提交后已跳转到最终注册页。")
                 return code
-            time.sleep(1)
+            time.sleep(0.4)
             continue
 
         if filled == "not-ready":
             if has_profile_form():
                 print("[*] 已直接进入最终注册页，跳过验证码按钮确认。")
                 return code
-            time.sleep(0.5)
+            time.sleep(0.25)
             continue
 
         if filled != "filled":
             print(f"[Debug] 验证码输入框已出现，但写入失败: {filled}")
-            time.sleep(0.5)
+            time.sleep(0.25)
             continue
 
-        time.sleep(1.2)
+        time.sleep(0.5)
         try:
             clicked = page.run_js(
                 r"""
@@ -604,12 +604,12 @@ return 'clicked';
             if has_profile_form():
                 print("[*] 确认邮箱后页面跳转成功，已进入最终注册页。")
                 return code
-            time.sleep(1)
+            time.sleep(0.4)
             continue
 
         if clicked == "clicked":
             print(f"[*] 已填写验证码并点击确认邮箱: {code}")
-            time.sleep(2)
+            time.sleep(0.8)
             refresh_active_page()
             if has_profile_form():
                 print("[*] 验证码确认完成，最终注册页已就绪。")
@@ -621,7 +621,7 @@ return 'clicked';
                 print(f"[*] 已填写验证码，页面已自动跳转到下一步: {current_url}")
                 return code
 
-        time.sleep(0.5)
+        time.sleep(0.25)
 
     try:
         debug_snapshot = page.run_js(
@@ -807,12 +807,12 @@ return [
         )
 
         if filled == 'not-ready':
-            time.sleep(0.5)
+            time.sleep(0.25)
             continue
 
         if filled != 'filled':
             print(f"[Debug] 最终注册页输入框已出现，但姓名/密码写入失败: {filled}")
-            time.sleep(0.5)
+            time.sleep(0.25)
             continue
 
         values_ok = page.run_js(
@@ -857,7 +857,7 @@ return String(givenInput.value || '').trim() === String(expectedGiven || '').tri
         )
         if not values_ok:
             print("[Debug] 最终注册页字段值校验失败，继续重试填写。")
-            time.sleep(0.5)
+            time.sleep(0.25)
             continue
 
         turnstile_state = page.run_js(
@@ -897,7 +897,7 @@ return String(challengeInput.value || '').trim() === String(token || '').trim();
                 if synced:
                     print("[*] Turnstile 响应已同步到最终注册表单。")
 
-        time.sleep(1.2)
+        time.sleep(0.5)
 
         try:
             submit_button = page.ele('tag:button@@text()=完成注册') or page.ele('tag:button@@text():Create Account') or page.ele('tag:button@@text():Sign up')
@@ -940,7 +940,7 @@ return challengeInput ? String(challengeInput.value || '').trim() : 'not-found';
         except (ContextLostError, PageDisconnectedError):
             refresh_active_page()
             if has_profile_form():
-                time.sleep(0.5)
+                time.sleep(0.25)
                 continue
             print("[*] 最终注册提交后页面已刷新，继续等待 sso cookie。")
             return {
@@ -957,7 +957,7 @@ return challengeInput ? String(challengeInput.value || '').trim() : 'not-found';
                 "password": password,
             }
 
-        time.sleep(0.5)
+        time.sleep(0.25)
 
     raise Exception("未找到最终注册表单或完成注册按钮")
 
@@ -1037,7 +1037,7 @@ def wait_for_sso_cookie(timeout=30):
         try:
             refresh_active_page()
             if page is None:
-                time.sleep(1)
+                time.sleep(0.4)
                 continue
 
             cookies = page.cookies(all_domains=True, all_info=True) or []
@@ -1061,7 +1061,7 @@ def wait_for_sso_cookie(timeout=30):
         except Exception:
             pass
 
-        time.sleep(1)
+        time.sleep(0.4)
 
     raise Exception(f"注册完成后未获取到 sso cookie，当前已见 cookie: {sorted(last_seen_names)}")
 
@@ -1134,12 +1134,9 @@ def push_sso_to_api(new_tokens: list):
     api_conf = conf.get("api", {})
     api_host = str(api_conf.get("endpoint", "")).strip()
     api_token = str(api_conf.get("token", "")).strip()
-    append_mode = api_conf.get("append", True)
-
     if not api_host or not api_token:
         return
 
-    list_url = build_api_url(api_host, "/admin/api/tokens")
     add_url = build_api_url(api_host, "/admin/api/tokens/add")
     headers = {
         "Authorization": f"Bearer {api_token}",
@@ -1149,22 +1146,6 @@ def push_sso_to_api(new_tokens: list):
     tokens_to_push = [str(t).strip() for t in new_tokens if str(t or "").strip()]
     if not tokens_to_push:
         return
-
-    if append_mode:
-        try:
-            get_resp = requests.get(list_url, headers=headers, timeout=15, verify=False)
-            if get_resp.status_code == 200:
-                existing_tokens = extract_existing_tokens(get_resp.json())
-                if existing_tokens is None:
-                    print(f"[Warn] 查询线上 token 成功，但返回格式不受支持，跳过去重并继续追加: {list_url}")
-                    existing_tokens = []
-                existing_set = set(existing_tokens)
-                tokens_to_push = [token for token in tokens_to_push if token not in existing_set]
-                print(f"[*] 查询到线上 {len(existing_tokens)} 个 token，本次新增 {len(new_tokens)} 个，待追加 {len(tokens_to_push)} 个")
-            else:
-                print(f"[Warn] 查询线上 token 失败: HTTP {get_resp.status_code}，将跳过去重并直接调用 add 接口")
-        except Exception as e:
-            print(f"[Warn] 查询线上 token 异常，将跳过去重并直接调用 add 接口: {type(e).__name__}: {e} | url={list_url}")
 
     if not tokens_to_push:
         print("[*] 本次没有新增 token 需要推送到 API。")
@@ -1246,7 +1227,7 @@ def main():
     args = parser.parse_args()
 
     current_round = 0
-    collected_sso: list = []
+    success_count = 0
     try:
         start_browser()
         while True:
@@ -1259,24 +1240,28 @@ def main():
 
             try:
                 result = run_single_registration(args.output, extract_numbers=args.extract_numbers)
-                collected_sso.append(result["sso"])
+                success_count += 1
                 round_succeeded = True
+                print(f"[*] 第 {current_round} 轮注册成功，立即推送当前 token 到 API...")
+                try:
+                    push_sso_to_api([result["sso"]])
+                except Exception as push_error:
+                    print(f"[Warn] 当前 token 立即推送失败，但不会影响后续任务: {push_error}")
             except KeyboardInterrupt:
                 print("\n[Info] 收到中断信号，停止后续轮次。")
                 break
             except Exception as error:
                 print(f"[Error] 第 {current_round} 轮失败: {error}")
             finally:
-                restart_browser()
+                if args.count == 0 or current_round < args.count:
+                    stop_browser()
 
             if args.count == 0 or current_round < args.count:
-                time.sleep(2)
+                time.sleep(0.5)
 
     finally:
-        if collected_sso:
-            print(f"\n[*] 注册完成，推送 {len(collected_sso)} 个 token 到 API...")
-            push_sso_to_api(collected_sso)
-
+        if success_count:
+            print(f"\n[*] 注册结束，本次共成功 {success_count} 轮，token 已按成功轮次即时推送。")
         stop_browser()
 
 
