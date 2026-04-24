@@ -1156,17 +1156,15 @@ def push_sso_to_api(new_tokens: list):
             if get_resp.status_code == 200:
                 existing_tokens = extract_existing_tokens(get_resp.json())
                 if existing_tokens is None:
-                    print(f"[Error] 查询线上 token 成功，但返回格式不受支持: {list_url}")
-                    return
+                    print(f"[Warn] 查询线上 token 成功，但返回格式不受支持，跳过去重并继续追加: {list_url}")
+                    existing_tokens = []
                 existing_set = set(existing_tokens)
                 tokens_to_push = [token for token in tokens_to_push if token not in existing_set]
                 print(f"[*] 查询到线上 {len(existing_tokens)} 个 token，本次新增 {len(new_tokens)} 个，待追加 {len(tokens_to_push)} 个")
             else:
-                print(f"[Error] 查询线上 token 失败: HTTP {get_resp.status_code}，放弃推送以保护存量数据")
-                return
+                print(f"[Warn] 查询线上 token 失败: HTTP {get_resp.status_code}，将跳过去重并直接调用 add 接口")
         except Exception as e:
-            print(f"[Error] 查询线上 token 异常: {e}，放弃推送以保护存量数据")
-            return
+            print(f"[Warn] 查询线上 token 异常，将跳过去重并直接调用 add 接口: {type(e).__name__}: {e} | url={list_url}")
 
     if not tokens_to_push:
         print("[*] 本次没有新增 token 需要推送到 API。")
@@ -1185,7 +1183,7 @@ def push_sso_to_api(new_tokens: list):
         else:
             print(f"[Warn] 推送 API 返回异常: HTTP {resp.status_code} {resp.text[:200]}")
     except Exception as e:
-        print(f"[Warn] 推送 API 失败: {e}")
+        print(f"[Warn] 推送 API 失败: {type(e).__name__}: {e} | url={add_url}")
 
 
 def run_single_registration(output_path=DEFAULT_SSO_FILE, extract_numbers=False):
