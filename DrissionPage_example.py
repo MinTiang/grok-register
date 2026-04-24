@@ -1116,10 +1116,13 @@ def push_sso_to_api(new_tokens: list):
             get_resp = requests.get(endpoint, headers=headers, timeout=15, verify=False)
             if get_resp.status_code == 200:
                 data = get_resp.json()
-                # 兼容两种响应格式：
-                # 新版: {"tokens": {"ssoBasic": [...]}}
+                # 兼容多种响应格式：
+                # 新版: {"pool": "auto", "tokens": [...]}
+                # 中间版: {"tokens": {"ssoBasic": [...]}}
                 # 旧版: {"ssoBasic": [...]}
-                if isinstance(data, dict) and isinstance(data.get("tokens"), dict):
+                if isinstance(data, dict) and isinstance(data.get("tokens"), list):
+                    existing = data.get("tokens", [])
+                elif isinstance(data, dict) and isinstance(data.get("tokens"), dict):
                     existing = data["tokens"].get("ssoBasic", [])
                 else:
                     existing = data.get("ssoBasic", []) if isinstance(data, dict) else []
@@ -1145,7 +1148,7 @@ def push_sso_to_api(new_tokens: list):
     try:
         resp = requests.post(
             endpoint,
-            json={"ssoBasic": tokens_to_push},
+            json={"pool": "auto", "tokens": tokens_to_push},
             headers=headers,
             timeout=60,
             verify=False,

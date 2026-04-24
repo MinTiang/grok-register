@@ -9,37 +9,6 @@ services:
     ports:
       - "127.0.0.1:1080:1080"
 
-  flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:latest
-    restart: unless-stopped
-    shm_size: 1gb
-    depends_on:
-      - warp
-
-  grok2api:
-    build:
-      context: ./vendor/grok2api
-      dockerfile: Dockerfile
-    image: grok2api-upstream:latest
-    environment:
-      TZ: Asia/Shanghai
-      DATA_DIR: /app/data
-      SERVER_HOST: 0.0.0.0
-      SERVER_PORT: 8000
-      SERVER_WORKERS: 1
-      FLARESOLVERR_URL: ${FLARESOLVERR_URL:-http://flaresolverr:8191}
-      CF_REFRESH_INTERVAL: ${CF_REFRESH_INTERVAL:-600}
-      CF_TIMEOUT: ${CF_TIMEOUT:-60}
-    ports:
-      - "${GROK2API_HOST_PORT:-8000}:8000"
-    volumes:
-      - ./runtime/grok2api/data:/app/data
-      - ./runtime/grok2api/logs:/app/logs
-    restart: unless-stopped
-    depends_on:
-      - warp
-      - flaresolverr
-
   console:
     build:
       context: .
@@ -64,5 +33,4 @@ services:
       - .:/workspace
     restart: unless-stopped
     depends_on:
-      - grok2api
       - warp

@@ -247,6 +247,7 @@ def run_health_checks() -> dict[str, Any]:
     request_proxy = str(defaults.get("proxy", "") or "").strip()
     api_conf = dict(defaults.get("api") or {})
     api_endpoint = str(api_conf.get("endpoint", "") or "").strip()
+    api_token = str(api_conf.get("token", "") or "").strip()
     temp_mail_api_base = str(defaults.get("temp_mail_api_base", "") or "").strip()
 
     warp_target = browser_proxy or request_proxy
@@ -311,15 +312,42 @@ def run_health_checks() -> dict[str, Any]:
         )
     else:
         try:
-            response = _request_with_optional_proxy(api_endpoint, timeout=15)
+            api_headers = {"Authorization": f"Bearer {api_token}"} if api_token else None
+            response = _request_with_optional_proxy(
+                api_endpoint,
+                timeout=15,
+                headers=api_headers,
+            )
             ok = response.status_code in {200, 401, 403, 405}
+            detail = "接口已可达。即使返回 401/403/405，也说明服务本身在线，只是需要正确的管理口令。"
+
+            if response.status_code == 200:
+                try:
+                    payload = response.json()
+                except ValueError:
+                    payload = None
+
+                if isinstance(payload, dict) and isinstance(payload.get("tokens"), list):
+                    token_count = len([item for item in payload.get("tokens", []) if item])
+                    pool_name = str(payload.get("pool", "") or "auto")
+                    detail = f"已识别为新版 grok2api sink，pool=`{pool_name}`，当前返回 {token_count} 个 token。"
+                elif isinstance(payload, dict) and isinstance(payload.get("tokens"), dict):
+                    token_count = len(payload["tokens"].get("ssoBasic", []) or [])
+                    detail = f"已识别为兼容版 grok2api sink，当前返回 {token_count} 个 ssoBasic token。"
+                elif isinstance(payload, dict) and isinstance(payload.get("ssoBasic"), list):
+                    token_count = len(payload.get("ssoBasic", []) or [])
+                    detail = f"已识别为旧版 grok2api sink，当前返回 {token_count} 个 ssoBasic token。"
+                else:
+                    ok = False
+                    detail = "接口可达，但返回内容不像当前项目支持的 grok2api token 管理接口。"
+
             items.append(
                 _build_health_item(
                     "grok2api",
                     "grok2api Sink",
                     ok,
                     f"HTTP {response.status_code}",
-                    "接口已可达。即使返回 401/403，也说明服务本身在线，只是需要正确的管理口令。",
+                    detail,
                     api_endpoint,
                 )
             )
