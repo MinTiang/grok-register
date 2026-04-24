@@ -405,7 +405,8 @@ return true;
 
 
 def fill_code_and_submit(email, dev_token, timeout=60):
-    # 杞閭楠岃瘉鐮侊紝骞跺湪椤甸潰涓婂畬鎴?OTP 杈撳叆涓庣‘璁ゃ€?    code = get_oai_code(dev_token, email)
+    # 轮询邮箱验证码，并在页面上完成 OTP 输入与确认。
+    code = get_oai_code(dev_token, email)
     if not code:
         raise Exception("获取验证码失败")
 
@@ -705,7 +706,8 @@ Object.defineProperty(MouseEvent.prototype, 'screenY', { value: screenY });
 
 
 def build_profile():
-    # 鐢熸垚涓€缁勫彲閲嶅浣跨敤鐨勬敞鍐岃祫鏂欙紝瀵嗙爜鑷冲皯鍖呭惈澶у皬鍐欍€佹暟瀛楀拰鐗规畩瀛楃銆?    given_names = [
+    # 生成一组可重复使用的注册资料，密码至少包含大小写、数字和特殊字符。
+    given_names = [
         "Ethan", "Noah", "Liam", "Owen", "Mason",
         "Lucas", "Leo", "Ryan", "Evan", "Aiden",
         "Mia", "Emma", "Lily", "Chloe", "Grace",
