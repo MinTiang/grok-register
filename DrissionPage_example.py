@@ -110,11 +110,8 @@ except Exception:
     pass
 if _browser_proxy:
     _proxy_scheme = str(_browser_proxy).split("://", 1)[0].lower()
-    if _proxy_scheme.startswith("socks"):
-        print(f"[Warn] 当前浏览器环境暂不支持 {_proxy_scheme} 代理，已跳过 browser_proxy: {_browser_proxy}")
-    else:
-        co.set_proxy(_browser_proxy)
-        print(f"[*] 浏览器代理: {_browser_proxy}")
+    co.set_argument("--proxy-server", _browser_proxy)
+    print(f"[*] 浏览器代理: {_browser_proxy}")
 
 # Linux 鏈嶅姟鍣ㄨ嚜鍔ㄦ娴?chromium 璺緞
 import platform
@@ -135,7 +132,7 @@ if platform.system() == "Linux":
                 break
     # user_data_path 鍦?start_browser() 姣忚疆鍔ㄦ€佽缃紝姝ゅ涓嶅浐瀹?
 
-co.set_timeouts(base=1)
+co.set_timeouts(base=5)
 
 # 鍔犺浇淇 MouseEvent.screenX / screenY 鐨勬墿灞曘€?
 EXTENSION_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "turnstilePatch"))
