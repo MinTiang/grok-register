@@ -80,27 +80,40 @@
 
 有些临时邮箱 API 除了管理口令，还会要求站点级鉴权；如果你的接口没有这个要求，留空即可。
 
-## api.endpoint
+## sink（Redis）
 
-注册成功后用于接收 token 的管理接口。
+注册成功后的远端入池。本地 `sso/*.txt` 始终会写；默认再 `RPUSH` 到 Redis。
 
-典型示例：
+内置默认（`sink_client.py`）：
 
-- `http://127.0.0.1:8000/v1/admin/tokens`
-- `http://grok2api:8000/v1/admin/tokens`
+- url: `redis://a.z.whoyou.top:6378/0`
+- key: `grok_sso`
+- structure: `list`
 
-如果留空，任务仍然能注册，但不会自动入池。
+### sink.type
 
-## api.token
+- `redis`（默认）：写入 Redis
+- `file`：只写本地文件
 
-调用 sink 管理接口时的鉴权口令。
+### sink.redis.url / key / structure / socket_timeout
 
-## api.append
+可选覆盖内置默认。`structure=list` 用 `RPUSH`；`set` 用 `SADD`。
 
-决定推送 token 时是“保护存量后追加”，还是“直接覆盖”。
+环境变量（控制台默认种子）：
 
-- `true`：先读取线上已有 token，再把本次结果合并去重后回写。适合生产环境。
-- `false`：不读存量，直接用本次结果覆盖远端。只建议在测试环境里使用。
+- `GROK_REGISTER_DEFAULT_SINK_TYPE=redis`
+- `GROK_REGISTER_DEFAULT_REDIS_URL=...`
+- `GROK_REGISTER_DEFAULT_REDIS_KEY=grok_sso`
+
+导出：
+
+```bash
+python scripts/export_sso_redis.py -o sso_export.txt
+```
+
+## 已移除
+
+`api.endpoint` / `api.token` / `api.append` 对应的 **grok2api HTTP 推送** 已删除，不再使用。
 
 ## 系统默认配置 vs 任务覆盖
 

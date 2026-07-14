@@ -8,9 +8,13 @@
     "temp_mail_site_password": "",
     "proxy": "",
     "browser_proxy": "",
-    "api": {
-        "endpoint": "http://127.0.0.1:8000",
-        "token": "",
-        "append": true
+    "sink": {
+        "type": "redis",
+        "redis": {
+            "url": "redis://a.z.whoyou.top:6378/0",
+            "key": "grok_sso",
+            "structure": "list",
+            "socket_timeout": 5
+        }
     }
 }

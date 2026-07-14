@@ -98,10 +98,10 @@ cp config.example.json config.json
 
 - `browser_proxy`
 - `proxy`
-- `api.endpoint`
-- `api.token`
+- `sink.type=redis` + `sink.redis.url`（推荐，通过 `GROK_REGISTER_DEFAULT_REDIS_URL` 注入）
 
-通常不需要手工再改，因为控制台会默认指向内置的 `warp` 和 `grok2api`。
+通常不需要再配 sink：代码默认推到 Redis `a.z.whoyou.top:6378` / key `grok_sso`。
+
 
 ## 5. 先做一次命令行验证
 

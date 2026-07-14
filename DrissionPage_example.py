@@ -15,7 +15,8 @@ import threading
 from typing import Any, Callable
 
 from email_register import get_email_and_token, get_oai_code
-from sink_client import push_tokens
+from sink_client import dispatch_sink
+
 
 
 def setup_run_logger() -> logging.Logger:
@@ -2184,28 +2185,20 @@ def append_sso_to_txt(sso_value, output_path=DEFAULT_SSO_FILE):
     print(f"[*] 宸茶拷鍔犲啓鍏?sso 鍒版枃浠? {output_path}")
 
 
-def push_sso_to_api(new_tokens: list):
+def push_sso_to_api(new_tokens: list, meta: dict | None = None):
+    # Always attempt Redis (hardcoded defaults in sink_client). config.json can
+    # still override sink settings when present and valid.
+    conf: dict = {}
     config_path = os.path.join(os.path.dirname(__file__), "config.json")
     try:
         with open(config_path, "r", encoding="utf-8") as file:
-            conf = json.load(file)
+            loaded = json.load(file)
+        if isinstance(loaded, dict):
+            conf = loaded
     except Exception as exc:
-        print(f"[Warn] 璇诲彇 config.json 澶辫触锛岃烦杩囨帹閫? {exc}")
-        return
+        print(f"[Warn] 读取 config.json 失败，使用内置 Redis 配置推送: {exc}")
 
-    api_conf = conf.get("api", {}) or {}
-    api_host = str(api_conf.get("endpoint", "") or "").strip()
-    api_token = str(api_conf.get("token", "") or "").strip()
-    if not api_host or not api_token:
-        return
-
-    ok, message = push_tokens(
-        api_host=api_host,
-        api_token=api_token,
-        tokens=new_tokens,
-        timeout=60,
-        verify=False,
-    )
+    ok, message = dispatch_sink(conf, new_tokens, meta=meta)
     if ok:
         if message != "No tokens to push.":
             print(f"[*] {message}")
@@ -2232,14 +2225,14 @@ def run_single_registration(output_path=DEFAULT_SSO_FILE, extract_numbers=False)
 
     if run_logger:
         run_logger.info(
-            "娉ㄥ唽鎴愬姛 | email=%s | password=%s | given=%s | family=%s",
+            "注册成功 | email=%s | password=%s | given=%s | family=%s",
             email,
             profile.get("password", ""),
             profile.get("given_name", ""),
             profile.get("family_name", ""),
         )
 
-    print(f"[*] 鏈疆娉ㄥ唽瀹屾垚锛岄偖绠? {email}")
+    print(f"[*] 本轮注册完成，邮箱: {email}")
     return result
 
 
@@ -2269,9 +2262,12 @@ def main():
             try:
                 result = run_single_registration(args.output, extract_numbers=args.extract_numbers)
                 success_count += 1
-                print(f"[*] 第 {current_round} 轮注册成功，立即推送当前 token 到 API...")
+                print(f"[*] 第 {current_round} 轮注册成功，立即推送当前 token 到 sink...")
                 try:
-                    push_sso_to_api([result["sso"]])
+                    push_sso_to_api(
+                        [result["sso"]],
+                        meta={"email": result.get("email", "")},
+                    )
                 except Exception as push_error:
                     print(f"[Warn] 当前 token 立即推送失败，但不影响后续任务: {push_error}")
             except KeyboardInterrupt:

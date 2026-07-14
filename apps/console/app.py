@@ -31,7 +31,9 @@ REPO_ROOT = APP_DIR.parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from sink_client import build_sink_url, extract_sink_tokens, fetch_tokens
+from sink_client import DEFAULT_REDIS_KEY, DEFAULT_REDIS_URL
+
+
 
 RUNTIME_DIR = APP_DIR / "runtime"
 TASKS_DIR = RUNTIME_DIR / "tasks"
@@ -61,7 +63,8 @@ LINE_RE_SUCCESS = re.compile(r"注册成功\s*\|\s*email=([^|\s]+)")
 LINE_RE_ERROR = re.compile(r"\[Error\]\s*第\s*(\d+)\s*轮失败:\s*(.+)")
 LINE_RE_TEMP_EMAIL = re.compile(r"临时邮箱创建成功:\s*([^\s]+)")
 LINE_RE_FILLED_EMAIL = re.compile(r"已填写邮箱并点击注册:\s*([^\s]+)")
-LINE_RE_PUSH = re.compile(r"SSO token 已推送到 API")
+LINE_RE_PUSH = re.compile(r"SSO token 已写入 Redis")
+
 
 db_lock = threading.RLock()
 
@@ -194,6 +197,23 @@ def load_source_defaults() -> dict[str, Any]:
     if append_env is not None:
         api_base["append"] = append_env.strip().lower() in {"1", "true", "yes", "on"}
     base["api"] = api_base
+
+    sink_base = dict(base.get("sink") or {}) if isinstance(base.get("sink"), dict) else {}
+    sink_type_env = os.getenv("GROK_REGISTER_DEFAULT_SINK_TYPE")
+    if sink_type_env is not None and sink_type_env.strip():
+        sink_base["type"] = sink_type_env.strip().lower()
+    redis_base = dict(sink_base.get("redis") or {}) if isinstance(sink_base.get("redis"), dict) else {}
+    redis_url_env = os.getenv("GROK_REGISTER_DEFAULT_REDIS_URL")
+    if redis_url_env is not None and redis_url_env.strip():
+        redis_base["url"] = redis_url_env.strip()
+        sink_base.setdefault("type", "redis")
+    redis_key_env = os.getenv("GROK_REGISTER_DEFAULT_REDIS_KEY")
+    if redis_key_env is not None and redis_key_env.strip():
+        redis_base["key"] = redis_key_env.strip()
+    if redis_base:
+        sink_base["redis"] = redis_base
+    if sink_base:
+        base["sink"] = sink_base
     return base
 
 
@@ -251,10 +271,11 @@ def run_health_checks() -> dict[str, Any]:
 
     browser_proxy = str(defaults.get("browser_proxy", "") or "").strip()
     request_proxy = str(defaults.get("proxy", "") or "").strip()
-    api_conf = dict(defaults.get("api") or {})
-    api_host = str(api_conf.get("endpoint", "") or "").strip()
-    api_token = str(api_conf.get("token", "") or "").strip()
     temp_mail_api_base = str(defaults.get("temp_mail_api_base", "") or "").strip()
+    sink = defaults.get("sink") if isinstance(defaults.get("sink"), dict) else {}
+    redis_conf = sink.get("redis") if isinstance(sink.get("redis"), dict) else {}
+    redis_url = str(redis_conf.get("url", "") or DEFAULT_REDIS_URL).strip() or DEFAULT_REDIS_URL
+    redis_key = str(redis_conf.get("key", "") or DEFAULT_REDIS_KEY).strip() or DEFAULT_REDIS_KEY
 
     warp_target = browser_proxy or request_proxy
     if not warp_target:
@@ -305,271 +326,41 @@ def run_health_checks() -> dict[str, Any]:
                 )
             )
 
-    if not api_host:
-        items.append(
-            _build_health_item(
-                "grok2api",
-                "grok2api Sink",
-                False,
-                "未配置 token sink",
-                "当前系统默认配置里没有 `api.endpoint` 主 host，注册成功后不会自动入池。",
-                "-",
-            )
-        )
-    else:
-        try:
-            list_url = _build_grok_sink_url(api_host, "/admin/api/tokens")
-            api_headers = {"Authorization": f"Bearer {api_token}"} if api_token else None
-            response = _request_with_optional_proxy(
-                list_url,
-                timeout=15,
-                headers=api_headers,
-            )
-            ok = response.status_code in {200, 401, 403}
-            detail = "接口已可达。即使返回 401/403，也说明服务本身在线，只是需要正确的管理口令。"
-
-            if response.status_code == 200:
-                try:
-                    payload = response.json()
-                except ValueError:
-                    payload = None
-
-                parsed = _extract_grok_sink_tokens(payload)
-                if parsed:
-                    version, tokens = parsed
-                    pool_name = str(payload.get("pool", "") or "auto") if isinstance(payload, dict) else "auto"
-                    if version == "new":
-                        detail = f"已识别为新版 grok2api sink，GET `{list_url}` 成功，pool=`{pool_name}`，当前返回 {len(tokens)} 个 token。"
-                    elif version == "compat":
-                        detail = f"已识别为兼容版 grok2api sink，GET `{list_url}` 成功，当前返回 {len(tokens)} 个 ssoBasic token。"
-                    else:
-                        detail = f"已识别为旧版 grok2api sink，GET `{list_url}` 成功，当前返回 {len(tokens)} 个 ssoBasic token。"
-                else:
-                    ok = False
-                    detail = f"接口可达，但 `GET {list_url}` 的返回内容不像当前项目支持的 grok2api token 管理接口。"
-
-            items.append(
-                _build_health_item(
-                    "grok2api",
-                    "grok2api Sink",
-                    ok,
-                    f"HTTP {response.status_code}",
-                    detail,
-                    list_url,
-                )
-            )
-        except Exception as exc:
-            items.append(
-                _build_health_item(
-                    "grok2api",
-                    "grok2api Sink",
-                    False,
-                    "接口不可达",
-                    f"访问 `{_build_grok_sink_url(api_host, '/admin/api/tokens')}` 失败：{exc}",
-                    _build_grok_sink_url(api_host, "/admin/api/tokens"),
-                )
-            )
-
-    if not temp_mail_api_base:
-        items.append(
-            _build_health_item(
-                "temp_mail",
-                "Temp Mail API",
-                False,
-                "未配置临时邮箱 API",
-                "当前系统默认配置里没有 `temp_mail_api_base`，注册流程会在创建邮箱阶段直接失败。",
-                "-",
-            )
-        )
-    else:
-        try:
-            response = _request_with_optional_proxy(
-                temp_mail_api_base,
-                proxy_url=request_proxy,
-                timeout=15,
-            )
-            ok = response.status_code < 500
-            items.append(
-                _build_health_item(
-                    "temp_mail",
-                    "Temp Mail API",
-                    ok,
-                    f"HTTP {response.status_code}",
-                    "接口地址可达。这里只做基础连通性检查，不会真的创建邮箱地址。",
-                    temp_mail_api_base,
-                )
-            )
-        except Exception as exc:
-            items.append(
-                _build_health_item(
-                    "temp_mail",
-                    "Temp Mail API",
-                    False,
-                    "接口不可达",
-                    f"访问 `{temp_mail_api_base}` 失败：{exc}",
-                    temp_mail_api_base,
-                )
-            )
-
-    xai_proxy = browser_proxy or request_proxy
     try:
-        response = _request_with_optional_proxy(
-            "https://accounts.x.ai/sign-up?redirect=grok-com",
-            proxy_url=xai_proxy,
-            timeout=20,
-            headers={"User-Agent": "Mozilla/5.0"},
+        import redis as redis_lib
+
+        client = redis_lib.from_url(
+            redis_url,
+            socket_timeout=3,
+            socket_connect_timeout=3,
+            decode_responses=True,
         )
-        ok = response.status_code in {200, 301, 302, 303, 307, 308}
-        detail = f"使用 `{_mask_proxy(xai_proxy)}` 访问注册页返回 HTTP {response.status_code}。" if xai_proxy else f"直连访问注册页返回 HTTP {response.status_code}。"
-        if not ok and response.status_code in {401, 403, 429}:
-            detail += " 这通常说明当前出口被目标站点拦截、限流，或还没完成可用的人机验证链路。"
-        items.append(
-            _build_health_item(
-                "xai",
-                "x.ai Sign-up",
-                ok,
-                f"HTTP {response.status_code}",
-                detail,
-                "https://accounts.x.ai/sign-up?redirect=grok-com",
+        try:
+            pong = client.ping()
+            length = client.llen(redis_key)
+            items.append(
+                _build_health_item(
+                    "redis",
+                    "Redis Sink",
+                    bool(pong),
+                    f"PING ok | LLEN {length}",
+                    f"Redis 可达，list key=`{redis_key}` 当前长度 {length}。注册成功后会 RPUSH 到该 key。",
+                    redis_url,
+                )
             )
-        )
+        finally:
+            client.close()
     except Exception as exc:
         items.append(
             _build_health_item(
-                "xai",
-                "x.ai Sign-up",
+                "redis",
+                "Redis Sink",
                 False,
-                "注册页不可达",
-                f"访问 `x.ai` 注册页失败：{exc}",
-                "https://accounts.x.ai/sign-up?redirect=grok-com",
+                "Redis 不可达",
+                f"连接 `{redis_url}` / key=`{redis_key}` 失败：{exc}",
+                redis_url,
             )
         )
-
-    return {
-        "items": items,
-        "checked_at": now_iso(),
-    }
-
-
-def run_health_checks() -> dict[str, Any]:
-    defaults = merged_defaults()
-    items: list[dict[str, Any]] = []
-
-    browser_proxy = str(defaults.get("browser_proxy", "") or "").strip()
-    request_proxy = str(defaults.get("proxy", "") or "").strip()
-    api_conf = dict(defaults.get("api") or {})
-    api_host = str(api_conf.get("endpoint", "") or "").strip()
-    api_token = str(api_conf.get("token", "") or "").strip()
-    temp_mail_api_base = str(defaults.get("temp_mail_api_base", "") or "").strip()
-
-    warp_target = browser_proxy or request_proxy
-    if not warp_target:
-        items.append(
-            _build_health_item(
-                "warp",
-                "WARP / Proxy",
-                False,
-                "未配置代理出口",
-                "当前系统默认配置里没有 `browser_proxy` 或 `proxy`，无法检查前置网络出口。",
-                "-",
-            )
-        )
-    else:
-        try:
-            response = _request_with_optional_proxy(
-                "https://www.cloudflare.com/cdn-cgi/trace",
-                proxy_url=warp_target,
-                timeout=20,
-            )
-            body = response.text
-            ip_match = re.search(r"(?m)^ip=(.+)$", body)
-            loc_match = re.search(r"(?m)^loc=(.+)$", body)
-            warp_match = re.search(r"(?m)^warp=(.+)$", body)
-            ip = ip_match.group(1).strip() if ip_match else "unknown"
-            loc = loc_match.group(1).strip() if loc_match else "unknown"
-            warp_state = warp_match.group(1).strip() if warp_match else "unknown"
-            ok = response.status_code == 200
-            items.append(
-                _build_health_item(
-                    "warp",
-                    "WARP / Proxy",
-                    ok,
-                    f"HTTP {response.status_code} | IP {ip} | LOC {loc}",
-                    f"通过代理 `{_mask_proxy(warp_target)}` 访问 Cloudflare trace 成功，warp={warp_state}。",
-                    _mask_proxy(warp_target),
-                )
-            )
-        except Exception as exc:
-            items.append(
-                _build_health_item(
-                    "warp",
-                    "WARP / Proxy",
-                    False,
-                    "代理出口不可达",
-                    f"通过 `{_mask_proxy(warp_target)}` 访问 Cloudflare trace 失败：{exc}",
-                    _mask_proxy(warp_target),
-                )
-            )
-
-    if not api_host:
-        items.append(
-            _build_health_item(
-                "grok2api",
-                "grok2api Sink",
-                False,
-                "未配置 token sink",
-                "当前系统默认配置里没有 `api.endpoint` 主机地址，注册成功后不会自动入池。",
-                "-",
-            )
-        )
-    else:
-        list_url = build_sink_url(api_host, "/admin/api/tokens")
-        try:
-            response = fetch_tokens(api_host, api_token=api_token, timeout=15, verify=False)
-            ok = response.status_code in {200, 401, 403}
-            detail = "接口已可达。即使返回 401/403，也说明服务本身在线，只是需要正确的管理口令。"
-
-            if response.status_code == 200:
-                try:
-                    payload = response.json()
-                except ValueError:
-                    payload = None
-
-                parsed = extract_sink_tokens(payload)
-                if parsed:
-                    version, tokens = parsed
-                    pool_name = str(payload.get("pool", "") or "auto") if isinstance(payload, dict) else "auto"
-                    if version == "new":
-                        detail = f"已识别为新版 grok2api sink，GET `{list_url}` 成功，pool=`{pool_name}`，当前返回 {len(tokens)} 个 token。"
-                    elif version == "compat":
-                        detail = f"已识别为兼容版 grok2api sink，GET `{list_url}` 成功，当前返回 {len(tokens)} 个 ssoBasic token。"
-                    else:
-                        detail = f"已识别为旧版 grok2api sink，GET `{list_url}` 成功，当前返回 {len(tokens)} 个 ssoBasic token。"
-                else:
-                    ok = False
-                    detail = f"接口可达，但 `GET {list_url}` 的返回内容不像当前项目支持的 grok2api token 管理接口。"
-
-            items.append(
-                _build_health_item(
-                    "grok2api",
-                    "grok2api Sink",
-                    ok,
-                    f"HTTP {response.status_code}",
-                    detail,
-                    list_url,
-                )
-            )
-        except Exception as exc:
-            items.append(
-                _build_health_item(
-                    "grok2api",
-                    "grok2api Sink",
-                    False,
-                    "接口不可达",
-                    f"访问 `{list_url}` 失败：{exc}",
-                    list_url,
-                )
-            )
 
     if not temp_mail_api_base:
         items.append(
@@ -656,6 +447,7 @@ def run_health_checks() -> dict[str, Any]:
     }
 
 
+
 class TaskCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     count: int = Field(50, ge=1, le=5000)
@@ -732,13 +524,16 @@ def merged_defaults() -> dict[str, Any]:
     if "api_append" in saved:
         api_base["append"] = bool(saved.get("api_append", True))
     base["api"] = api_base
+    # sink is env/config-driven in phase 1 (no UI fields yet)
+    if isinstance(base.get("sink"), dict):
+        base["sink"] = dict(base.get("sink") or {})
     return base
 
 
 def build_task_config(payload: TaskCreate) -> dict[str, Any]:
     defaults = merged_defaults()
     api_defaults = dict(defaults.get("api") or {})
-    return {
+    config: dict[str, Any] = {
         "run": {"count": int(payload.count)},
         "proxy": defaults.get("proxy", "") if payload.proxy is None else payload.proxy.strip(),
         "browser_proxy": defaults.get("browser_proxy", "") if payload.browser_proxy is None else payload.browser_proxy.strip(),
@@ -752,6 +547,10 @@ def build_task_config(payload: TaskCreate) -> dict[str, Any]:
             "append": api_defaults.get("append", True) if payload.api_append is None else bool(payload.api_append),
         },
     }
+    sink_defaults = defaults.get("sink")
+    if isinstance(sink_defaults, dict) and sink_defaults:
+        config["sink"] = sink_defaults
+    return config
 
 
 def serialize_task(row: sqlite3.Row) -> dict[str, Any]:

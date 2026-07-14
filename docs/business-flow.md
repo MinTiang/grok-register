@@ -6,7 +6,8 @@
    - 前置网络出口：`browser_proxy` / `proxy`
    - 临时邮箱：`temp_mail_api_base` / `temp_mail_admin_password` / `temp_mail_domain`
    - 注册次数：`run.count`
-   - 结果落池：`api.endpoint` / `api.token`
+   - 结果落池：Redis `grok_sso`（`sink_client` 内置默认）
+
 2. 控制台创建任务后，会生成独立任务目录和独立 `config.json`。
 3. 执行器启动浏览器；如果当前是无头 Linux，优先通过 `Xvfb` 提供显示环境。
 4. 浏览器进入 `x.ai` 注册页，并切到邮箱注册流程。
@@ -17,7 +18,8 @@
 9. 自动填写随机姓名和密码，完成注册。
 10. 注册成功后从浏览器 cookie 中提取 `sso`。
 11. 把 `sso` 先写入任务目录下的 `sso/task_<id>.txt`。
-12. 如果配置了 `api.endpoint`，再把 `sso` 推送到 `grok2api` 兼容接口。
+12. 把 `sso` 推送到 Redis LIST `grok_sso`（默认 `a.z.whoyou.top:6378`）。
+
 13. 控制台持续解析日志，显示当前轮次、成功数、失败数、最近邮箱和错误。
 
 ## 现阶段卡点通常在哪
