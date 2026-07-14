@@ -108,7 +108,7 @@ python DrissionPage_example.py --count 1
 ```json
 {
   "run": {
-    "count": 50
+    "count": 100
   },
   "temp_mail_api_base": "https://mail-api.example.com",
   "temp_mail_admin_password": "<your_admin_password>",

@@ -154,7 +154,7 @@ def load_source_defaults() -> dict[str, Any]:
             base = json.loads(example_path.read_text(encoding="utf-8"))
         else:
             base = {
-                "run": {"count": 50},
+                "run": {"count": 100},
                 "proxy": "",
                 "browser_proxy": "",
                 "temp_mail_api_base": "",
@@ -450,7 +450,7 @@ def run_health_checks() -> dict[str, Any]:
 
 class TaskCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
-    count: int = Field(50, ge=1, le=5000)
+    count: int = Field(100, ge=1, le=5000)
     proxy: str | None = None
     browser_proxy: str | None = None
     temp_mail_api_base: str | None = None

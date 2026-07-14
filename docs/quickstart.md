@@ -149,7 +149,7 @@ GROK_REGISTER_CONSOLE_HOST=127.0.0.1 ./deploy/start-console.sh
 1. 先在“系统默认配置”里填好稳定参数
 2. 保存后，新建一个 `count=1` 的验证任务
 3. 确认日志、邮箱、token 入池都正常
-4. 再创建真正的批量任务，例如 `count=50`
+4. 再创建真正的批量任务，例如 `count=100`
 
 ## 8. 成功后你会看到什么
 
